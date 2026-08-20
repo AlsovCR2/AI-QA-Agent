@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "qa-agent"
+version = "0.1.0"
+description = "AI QA & Software Engineering Agent: asistente de análisis, exploración y validación de proyectos de software orientado a herramientas."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Proprietary" }
+dependencies = [
+    "openai",
+    "python-dotenv",
+    "pydantic",
+    "typer",
+    "rich",
+    "pathspec",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+]
+
+[project.scripts]
+qa-agent = "qa_agent.cli.main:app"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = ["tests/fixtures"]
