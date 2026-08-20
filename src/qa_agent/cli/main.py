@@ -456,8 +456,7 @@ def main(
         )
 
 
-@app.command()
-def chat(
+def _chat_diferido(
     ruta: str = typer.Option(
         ".", "--ruta", help="Raíz del proyecto a analizar (default: cwd)."
     ),
@@ -474,7 +473,7 @@ def chat(
         "el razonamiento ya traza cada paso, FR-020/035).",
     ),
 ) -> None:
-    """Inicia el chat conversacional con memoria y tareas (Phase 13 / T089)."""
+    """Código histórico diferido; no es un punto de entrada del MVP."""
     logger = get_logger()
     conversacional = _construir_conversacional(ruta, demo, sesion_dir)
     logger.info("qa-agent chat iniciado (ruta=%s, demo=%s)", ruta, demo)

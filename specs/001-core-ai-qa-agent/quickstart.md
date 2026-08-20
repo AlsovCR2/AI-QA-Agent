@@ -12,6 +12,10 @@ duplicar detalles de implementación.
   `pytest` como dependencia de desarrollo).
 - Un proyecto de ejemplo con archivos, directorios, código y pruebas (p. ej. el
   propio repositorio, o un proyecto de prueba bajo `tests/fixtures/proyecto_ejemplo`).
+- El proyecto objetivo debe ser **de confianza**. Las validaciones que ejecutan
+  pruebas o cobertura corren código directamente en el host después de la
+  autorización; este MVP no proporciona aislamiento de proceso, red,
+  credenciales ni filesystem.
 - Sin API key: el agente arranca en modo demo con `FakeLLM` (para validar el
   flujo). Con `LLM_API_KEY` configurada (`.env`), se usa el backend real
   compatible OpenAI.
@@ -126,7 +130,8 @@ qa-agent --ruta ./proyecto_ejemplo
 ```
 
 **Esperado**
-- Ejecuta `run_tests` sobre el conjunto autorizado (SC-011).
+- Solicita autorización explícita antes de ejecutar código objetivo y solo
+  entonces ejecuta `run_tests` sobre el conjunto autorizado (SC-004/SC-011).
 - Reporta pasadas/falladas/errores reales (SC-002).
 - Los fallos se comunican explícitamente y las causas se delimitan a lo que la
   evidencia sustenta (FR-014).
@@ -171,7 +176,8 @@ Skills de QA/Testing (`.github/skills/qa-*`).
 > analiza los resultados de las pruebas
 ```
 
-**Esperado**: ejecuta `run_tests` y `analyze_test_results`; resumen determinista
+**Esperado**: solicita autorización antes de `run_tests` y después ejecuta
+`analyze_test_results`; resumen determinista
 y causas limitadas a la evidencia (FR-014, UC-007). Sin causas inventadas
 (SC-002). Referencia: [tool-contracts](contracts/tool-contracts.md) y
 [data-model](data-model.md) (ResultadoDeHerramienta).
@@ -193,7 +199,8 @@ falta de evidencia (SC-002). Referencia: [data-model](data-model.md)
 > analiza la cobertura de pruebas
 ```
 
-**Esperado**: ejecuta `analyze_coverage` con un comando autorizado; reporta
+**Esperado**: solicita autorización y solo entonces ejecuta `analyze_coverage`
+con un comando autorizado; reporta
 cobertura real global y por archivo (SC-002/SC-011). Ante fallo, informa
 explícitamente (SC-005). Referencia: [tool-contracts](contracts/tool-contracts.md)
 y [data-model](data-model.md) (CoverageReport).

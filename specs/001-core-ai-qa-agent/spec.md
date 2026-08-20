@@ -4,7 +4,7 @@
 
 **Created**: 2026-08-11
 
-**Version**: 1.3
+**Version**: 1.4
 
 **Status**: Draft
 
@@ -43,6 +43,12 @@
   opcional (`--mostrar-historial`). Trazabilidad ampliada: `UC-013` añadido en
   `docs/use-cases/`; tareas Phase 15 (T104-T110) en `tasks.md`. Implementado en
   Phase 15.
+- **1.4 (2026-08-20)** — Reconciliación SDD. Se formaliza como comportamiento
+  aprobado el bucle de razonamiento-acción de **US-11** (FR-032..FR-036 y
+  SC-015..SC-017). Se explicita que el MVP opera únicamente sobre repositorios
+  de confianza y no ofrece aislamiento de procesos ni de red. La conversación
+  persistente, memoria, tareas y `.qa_sessions` (US-12, FR-037..FR-041 y
+  SC-018..SC-020) quedan diferidas y no forman parte del alcance aprobado.
 
 ## Clarifications
 
@@ -401,6 +407,40 @@ explícitamente.
 
 ---
 
+### User Story 11 - El agente razona y actúa en varios pasos (Priority: P2)
+
+**Descripción.** Como profesional de QA, quiero que el agente planifique y
+ejecute análisis de varios pasos, mostrando el motivo, la herramienta y la
+observación real de cada paso, para poder auditar cómo llegó a su respuesta.
+
+**Requisito EARS (Evento).**
+- `[Evento] When` una solicitud requiere varias herramientas, `then` el agente
+  SHALL crear un plan con criterio de éxito antes de ejecutar, validar cada
+  acción y continuar hasta alcanzar el criterio, el límite de pasos o la falta
+  de evidencia.
+
+**Requisito EARS (Comportamiento no deseado).**
+- `[Comportamiento no deseado] If` una acción requiere autorización y esta es
+  denegada o queda pendiente, `then` el agente SHALL abstenerse de ejecutarla,
+  replantear una alternativa no sensible cuando exista o explicar la
+  imposibilidad.
+
+**Independent Test**: Se valida con una solicitud que requiere al menos dos
+herramientas, comprobando que el historial contiene razones, parámetros y
+observaciones reales y que nunca supera el límite configurado.
+
+**Acceptance Scenarios**:
+
+1. **Given** una solicitud multietapa, **When** el agente la atiende, **Then**
+   genera un plan explícito y cada afirmación factual final queda anclada en una
+   observación real.
+2. **Given** una acción sensible denegada, **When** el agente intenta continuar,
+   **Then** no ejecuta la acción y replantea o informa la limitación.
+3. **Given** un límite de pasos configurado, **When** no se alcanza antes el
+   criterio de éxito, **Then** el agente se detiene en dicho límite.
+
+---
+
 ## Ampliación Acciones Destructivas
 
 > **Nota de alcance (constitución XII / XIV).** Esta ampliación incorpora al
@@ -656,7 +696,23 @@ con `confianza` coherente.
   cobertura falla o no está disponible, sin presentar cobertura inventada
   (aligns FR-017/FR-018).
 
-**J. Acciones destructivas (modificación del proyecto)**
+**J. Bucle de razonamiento-acción**
+
+- **FR-032**: Cuando una solicitud requiera varias herramientas, el agente SHALL
+  crear antes de ejecutar un plan explícito con pasos y criterio de éxito.
+- **FR-033**: El agente SHALL seleccionar la herramienta y los parámetros de cada
+  paso mediante razonamiento, validándolos contra el esquema y la allowlist
+  aplicables antes de ejecutar.
+- **FR-034**: El agente SHALL iterar hasta alcanzar el criterio de éxito, el
+  límite configurado de pasos o determinar que no existe evidencia suficiente.
+- **FR-035**: El agente SHALL conservar trazabilidad por paso con motivo,
+  herramienta, parámetros validados y observación real; no SHALL presentar una
+  inferencia como si fuera una observación.
+- **FR-036**: Si una acción requiere autorización y esta es denegada o queda
+  pendiente, el agente SHALL abstenerse de ejecutarla y SHALL replantear una
+  alternativa no sensible cuando exista o reportar la imposibilidad.
+
+**K. Acciones destructivas (modificación del proyecto)**
 
 - **FR-042**: El agente SHALL poder crear archivos nuevos dentro del perímetro
   autorizado, rechazando la creación si el archivo ya existe o la ruta queda
@@ -677,7 +733,7 @@ con `confianza` coherente.
   (éxito/fracaso) basado en evidencia real, sin afirmar cambios que no ocurrieron
   (aligns FR-019).
 
-**K. Profundidad de análisis (lectura de código)**
+**L. Profundidad de análisis (lectura de código)**
 
 - **FR-048**: El agente SHALL poder leer el contenido real de un archivo del
   proyecto dentro del perímetro autorizado, reportando el contenido tal como
@@ -747,6 +803,13 @@ con `confianza` coherente.
 - **SC-014**: El 100% de los análisis de cobertura reportan cobertura real
   (global y por archivo) o, ante fallo, informan el estado explícitamente sin
   inventar cobertura (FR-030/031).
+- **SC-015**: El 100% de las solicitudes multietapa conservan un historial de
+  pasos con motivo, herramienta, parámetros y observaciones reales (FR-032..035).
+- **SC-016**: Ninguna ejecución del bucle supera el límite `pasos_max`
+  configurado (FR-034).
+- **SC-017**: El 100% de las afirmaciones factuales de la respuesta final quedan
+  ancladas en observaciones reales; las inferencias se distinguen explícitamente
+  (FR-035).
 - **SC-021**: El 100% de las operaciones que crean, modifican o eliminan archivos
   requieren autorización explícita antes de ejecutarse (FR-046, aligns SC-004).
 - **SC-022**: El 100% de las operaciones destructivas operan SOLO dentro del
@@ -773,8 +836,15 @@ con `confianza` coherente.
 - El alcance del MVP se limita a las tareas de análisis, exploración y
   validación descritas; capacidades como multi-agente, RAG, memoria de largo
   plazo o MCP quedan fuera del alcance inicial.
-- El agente opera sobre proyectos de software a los que se le otorga acceso
-  explícito y autorizado.
+- La conversación persistente, la memoria y gestión de tareas entre sesiones,
+  y el almacenamiento `.qa_sessions` quedan diferidos; US-12, FR-037..FR-041 y
+  SC-018..SC-020 no son requisitos aprobados de este MVP.
+- El agente opera únicamente sobre proyectos de software de confianza a los que
+  se le otorga acceso explícito y autorizado.
+- Las pruebas y la cobertura autorizadas pueden ejecutar código del proyecto
+  directamente en el host. El MVP no garantiza aislamiento de procesos, red,
+  credenciales ni sistema de archivos; el usuario debe autorizar estas
+  operaciones únicamente para repositorios de confianza.
 - El conjunto concreto de herramientas, el proveedor del modelo de lenguaje y el
   framework de agentes son decisiones de Plan/Implementation y no se fijan en
   esta especificación.

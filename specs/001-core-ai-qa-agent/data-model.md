@@ -265,6 +265,10 @@ erDiagram
 
 ## Entidades conversacionales (Phase 13 / US-12)
 
+> **ALCANCE DIFERIDO — NO ES REQUISITO DEL MVP.** US-12, FR-037..FR-041 y
+> SC-018..SC-020 no están aprobados por `spec.md`; este modelo se conserva solo
+> como registro histórico y no debe originar tareas ni justificar persistencia.
+
 > Sustentan el modo conversacional persistente: historial entre turnos,
 > memoria de hechos/preferencias, gestión de tareas asignadas y persistencia
 > de sesiones. Permiten que el agente sea un "chat agent" con continuidad,

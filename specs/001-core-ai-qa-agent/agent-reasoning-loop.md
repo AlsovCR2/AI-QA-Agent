@@ -262,6 +262,12 @@ ejecutar (FR-025).
 
 ## 12. Modo Conversacional (Phase 13 / US-12)
 
+> **ALCANCE DIFERIDO — NO ES REQUISITO DEL MVP.** La conversación persistente,
+> memoria, tareas y `.qa_sessions` no están aprobadas por `spec.md`. Esta sección
+> se conserva como registro histórico y no es autoridad para implementación.
+> El CLI vigente no registra `chat`; para el REPL efímero se usa directamente
+> `qa-agent --ruta <proyecto>`.
+
 El `AgentConversacional` (`src/qa_agent/agent/conversational.py`) envuelve al
 `Agent` ReAct como **herramienta analítica interna** y añade continuidad:
 
@@ -305,13 +311,15 @@ Así el LLM planifica con la memoria de la sesión, no como un single-shot.
 - `GestorTareas` mantiene CRUD de tareas ligado a la sesión (estado,
   prioridad, etiquetas, dependencias, asignación).
 
-### 12.4 CLI de chat (T089)
+### 12.4 Diseño histórico del CLI de chat (T089, diferido)
 
-`qa-agent chat --ruta <proyecto> [--demo] [--sesion-dir <dir>]` abre un REPL con
-prompt `> `, comandos `/tarea`, `/sesion`, `/memoria`, `/ayuda`, y renderizado
-de razonamiento/respuesta reutilizando `_renderizar_respuesta`.
+El diseño diferido proponía
+`qa-agent chat --ruta <proyecto> [--demo] [--sesion-dir <dir>]`, con comandos
+`/tarea`, `/sesion`, `/memoria` y `/ayuda`. Esa sintaxis no está registrada
+en el CLI activo y produce un error de argumento inesperado. El REPL aprobado
+usa `qa-agent --ruta <proyecto>`, sin persistencia entre procesos.
 
-### 12.6 Ejecución de tareas (`/tarea run <id>`, T093)
+### 12.5 Ejecución de tareas (`/tarea run <id>`, T093, diferido)
 
 Una tarea no solo se rastrea: **se ejecuta**. `ejecutar_tarea` en
 `AgentConversacional`:
@@ -328,7 +336,7 @@ Una tarea no solo se rastrea: **se ejecuta**. `ejecutar_tarea` en
 5. El turno y el resultado quedan en la `Conversacion` y se persisten con
    `/sesion save` (SC-020).
 
-### 12.5 Implementación (Phase 13 / tasks.md T085-T092)
+### 12.6 Implementación histórica conservada (Phase 13 / T085-T093)
 
 - `src/qa_agent/agent/reasoning.py`: entidades `Conversacion`, `Turno`,
   `Memoria`, `TareaAgente` (+ `EstadoTarea`).
@@ -336,7 +344,8 @@ Una tarea no solo se rastrea: **se ejecuta**. `ejecutar_tarea` en
 - `src/qa_agent/agent/gestor_tareas.py`: `GestorTareas`.
 - `src/qa_agent/agent/conversational.py`: `AgentConversacional`.
 - `src/qa_agent/agent/loop.py`: `Agent.atender(..., contexto)` inyecta memoria.
-- `src/qa_agent/cli/main.py`: comando `chat` y procesamiento de `/comandos`.
+- `src/qa_agent/cli/main.py`: helpers históricos y función privada
+  `_chat_diferido`; no existe un comando Typer `chat` registrado.
 - `docs/use-cases/UC-011.md`: caso de uso del chat con memoria y tareas.
 - `data-model.md` §Entidades conversacionales: ER de `Conversacion/Turno/
   Memoria/TareaAgente`.

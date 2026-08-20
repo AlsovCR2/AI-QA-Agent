@@ -8,6 +8,7 @@ dentro de diccionarios y listas. Es idempotente: no altera texto sin secretos.
 from __future__ import annotations
 
 import re
+from dataclasses import fields, is_dataclass, replace
 from typing import Any
 
 _VALOR = "***"
@@ -47,6 +48,12 @@ class Redactor:
         """Redacta secretos de forma recursiva manteniendo el tipo de dato."""
         if isinstance(entrada, str):
             return self._redactar_str(entrada)
+        if is_dataclass(entrada) and not isinstance(entrada, type):
+            valores = {
+                campo.name: self.redactar(getattr(entrada, campo.name))
+                for campo in fields(entrada)
+            }
+            return replace(entrada, **valores)
         if isinstance(entrada, dict):
             return {k: self.redactar(v) for k, v in entrada.items()}
         if isinstance(entrada, list):

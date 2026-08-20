@@ -25,6 +25,7 @@ from qa_agent.tools.base import (
     ResultadoDeHerramienta,
 )
 from qa_agent.llm.backend import LLMBackend
+from qa_agent.security.redactor import Redactor
 
 # Extensiones de código fuente reconocidas, mapeadas a la etiqueta de lenguaje
 # usada en los bloques de código del prompt del LLM. `generate_test_cases`
@@ -121,12 +122,16 @@ class GenerateTestCasesHerramienta(Herramienta):
     requiere_autorizacion = False
 
     def __init__(
-        self, rutas_permitidas: list[str] | None = None, llm_backend: LLMBackend | None = None
+        self,
+        rutas_permitidas: list[str] | None = None,
+        llm_backend: LLMBackend | None = None,
+        redactor: Redactor | None = None,
     ) -> None:
         if rutas_permitidas is None:
             rutas_permitidas = []
         self._allowlist = Allowlist(rutas_permitidas) if rutas_permitidas else None
         self._llm_backend = llm_backend
+        self._redactor = redactor or Redactor()
 
     def _buscar_codigo_relevante(self, ruta: Path, objetivo: str) -> list[tuple[str, str]]:
         """
@@ -186,11 +191,17 @@ class GenerateTestCasesHerramienta(Herramienta):
     def _construir_prompt(self, objetivo: str, cripticidad: str, fuentes: list[tuple[str, str]]) -> str:
         """Construye el prompt para el LLM."""
         tipo_map = {
+            "happy_path": "happy_path",
+            "edge_cases": "edge_case",
+            "usuarios_no_validos": "negativo",
+        }
+        tipo_descripcion = {
             "happy_path": "happy_path (casos de uso normal/esperado)",
             "edge_cases": "edge_case (casos límite, bordes, valores extremos)",
             "usuarios_no_validos": "negativo (entradas inválidas, errores esperados)",
         }
-        tipo_texto = tipo_map.get(cripticidad, cripticidad)
+        tipo_esperado = tipo_map.get(cripticidad, cripticidad)
+        tipo_texto = tipo_descripcion.get(cripticidad, tipo_esperado)
 
         fuentes_texto = "\n\n".join(
             [
@@ -209,7 +220,7 @@ Genera una lista JSON de casos de prueba. Cada caso debe tener:
 - descripcion: descripción breve del caso
 - entrada_esperada: código de entrada (ej: "funcion(1, 2)")
 - resultado_esperado: resultado esperado (ej: "3")
-- tipo: "{cripticidad}" (usar exactamente este valor)
+- tipo: "{tipo_esperado}" (usar exactamente este valor)
 
 Solo genera casos basados en el código real proporcionado. Si no hay código relevante, devuelve [].
 
@@ -219,7 +230,7 @@ Formato de salida (JSON válido):
     "descripcion": "...",
     "entrada_esperada": "...",
     "resultado_esperado": "...",
-    "tipo": "{cripticidad}"
+    "tipo": "{tipo_esperado}"
   }}
 ]"""
 
@@ -235,30 +246,32 @@ Formato de salida (JSON válido):
         }
         tipo_esperado = tipo_map.get(cripticidad, cripticidad)
 
+        # Extraer JSON y fallar explícitamente si el backend no cumple el
+        # contrato; una lista JSON vacía sigue siendo una respuesta válida.
+        respuesta = respuesta.strip()
+        if respuesta.startswith("```json"):
+            respuesta = respuesta[7:]
+        if respuesta.endswith("```"):
+            respuesta = respuesta[:-3]
+        respuesta = respuesta.strip()
         try:
-            # Intentar extraer JSON de la respuesta
-            respuesta = respuesta.strip()
-            if respuesta.startswith("```json"):
-                respuesta = respuesta[7:]
-            if respuesta.endswith("```"):
-                respuesta = respuesta[:-3]
-            respuesta = respuesta.strip()
-
             casos = json.loads(respuesta)
+        except json.JSONDecodeError as error:
+            raise ValueError("respuesta JSON inválida del backend") from error
 
-            # Validar cada caso
-            casos_validos = []
-            for caso in casos:
-                if isinstance(caso, dict) and all(
-                    k in caso for k in ("descripcion", "entrada_esperada", "resultado_esperado", "tipo")
-                ):
-                    # Asegurar tipo correcto según schema
-                    caso["tipo"] = tipo_esperado
-                    casos_validos.append(caso)
+        if not isinstance(casos, list):
+            raise ValueError("la respuesta del backend debe ser una lista JSON")
 
-            return casos_validos
-        except (json.JSONDecodeError, ValueError):
-            return []
+        casos_validos = []
+        campos = ("descripcion", "entrada_esperada", "resultado_esperado", "tipo")
+        for caso in casos:
+            if not isinstance(caso, dict) or not all(k in caso for k in campos):
+                raise ValueError("caso de prueba inválido en respuesta del backend")
+            caso_normalizado = dict(caso)
+            caso_normalizado["tipo"] = tipo_esperado
+            casos_validos.append(caso_normalizado)
+
+        return casos_validos
 
     def ejecutar(self, parametros: dict[str, Any]) -> ResultadoDeHerramienta:
         ruta_raw = parametros.get("ruta", ".")
@@ -311,11 +324,38 @@ Formato de salida (JSON válido):
         if self._llm_backend is not None:
             prompt = self._construir_prompt(objetivo, cripticidad, fuentes_encontradas)
             try:
-                respuesta_llm = self._llm_backend.generar_respuesta(prompt)
-                casos_propuestos = self._parsear_respuesta_llm(respuesta_llm, cripticidad)
-            except Exception:
-                # Si falla LLM, devolver casos vacíos pero con fuentes
-                casos_propuestos = []
+                solicitud_llm = self._redactor.redactar({"texto": prompt})
+                evidencia = ResultadoDeHerramienta(
+                    herramienta_id=self.id,
+                    estado=EstadoResultado.EXITO,
+                    datos={"fuentes": rutas_fuentes},
+                )
+                respuesta_llm = self._llm_backend.generar_respuesta(
+                    solicitud_llm,
+                    self._redactor.redactar([evidencia]),
+                )
+                if not isinstance(respuesta_llm, dict):
+                    raise TypeError("generar_respuesta debe devolver un diccionario")
+                texto_respuesta = respuesta_llm.get("texto")
+                if not isinstance(texto_respuesta, str):
+                    raise TypeError("la respuesta del backend no contiene texto")
+                casos_propuestos = self._parsear_respuesta_llm(
+                    texto_respuesta,
+                    cripticidad,
+                )
+            except Exception as error:  # noqa: BLE001 - frontera de proveedor
+                return ResultadoDeHerramienta(
+                    herramienta_id=self.id,
+                    estado=EstadoResultado.ERROR,
+                    datos={
+                        "casos_propuestos": [],
+                        "fuentes": rutas_fuentes,
+                    },
+                    error=(
+                        "Error del backend LLM al generar casos: "
+                        f"{self._redactor.redactar(str(error))}"
+                    ),
+                )
         else:
             # Sin LLM disponible: generar casos básicos deterministas basados en el código
             casos_propuestos = self._generar_casos_basicos(fuentes_encontradas, cripticidad)

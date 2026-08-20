@@ -18,9 +18,10 @@ visible de sus acciones (trazabilidad), solicitando autorización para acciones
 sensibles (human-in-the-loop) y evitando inventar información (honestidad).
 
 El MVP se limita a las tareas de análisis/exploración/validación definidas en el
-spec y a una configuración sencilla de herramientas. Quedan fuera del alcance
-las capacidades avanzadas (multi-agente, RAG, memoria de largo plazo, MCP,
-observabilidad distribuida).
+spec, incluido el comportamiento formal de razonamiento-acción de US-11, y a
+una configuración sencilla de herramientas. Quedan fuera del alcance las
+capacidades avanzadas (multi-agente, RAG, memoria de largo plazo, conversación
+persistente, gestión de tareas entre sesiones, MCP y observabilidad distribuida).
 
 ## Technical Context
 
@@ -71,8 +72,9 @@ secretos **nunca** en código fuente.
 **Observabilidad**: `logging` (stdlib) con redacción de secretos por defecto, y
 `rich` para el historial visible al usuario (FR-020).
 
-**Storage**: N/A (estado en memoria por conversación; sin persistencia en el
-MVP). No se incorporan bases de datos ni memoria de largo plazo (principio XII).
+**Storage**: N/A (estado efímero en memoria durante una ejecución; sin
+persistencia en el MVP). No se incorporan bases de datos, `.qa_sessions`, chat
+persistente, tareas persistentes ni memoria de largo plazo (principio XII).
 
 **Testing**: `pytest`. Las herramientas se prueban de forma independiente sin
 LLM real (principio III / SC-006). El agente se prueba con `FakeLLM` para
@@ -97,6 +99,12 @@ proyectos medianos (< 100k archivos) en tiempo submáximo perceptible.
 - Mínimo privilegio en toda operación (principio IV, FR-025, SC-011).
 - No inventar información (principio IX, FR-019, SC-002).
 - Herramientas probables sin LLM real (principio III, SC-006).
+- El proyecto objetivo se considera de confianza. `run_tests` y
+  `analyze_coverage` pueden ejecutar código directamente en el host únicamente
+  tras autorización explícita y con comandos/rutas restringidos.
+- El MVP no promete aislamiento de proceso, red, credenciales o filesystem para
+  código objetivo; la documentación debe advertir este límite sin atribuir una
+  garantía de sandbox inexistente.
 
 **Scale/Scope**: MVP de agente asistente de análisis/QA. Alcance limitado al
 spec 001 (UC-001 a UC-007). Proyectos de software pequeños/medianos con acceso
@@ -126,10 +134,13 @@ plan y su estado de cumplimiento.
 | XIII | Documentación | Decisiones arquitectónicas y técnicas documentadas y alineadas con la implementación (spec/plan/tasks/quickstart). | ✅ Cumple |
 | XIV | Spec-Driven Development | Implementación guiada por spec 001; sin funcionalidad fuera de alcance. | ✅ Cumple |
 
-**Resultado del gate**: APROBADO. No se detectan violaciones de principios que
+**Resultado del gate de diseño**: APROBADO. No se detectan violaciones de principios que
 requieran justificación vía complejidad. La arquitectura (una librería + CLI,
 con interfaces de herramienta y LLM) es la opción más simple que satisface los
-requisitos; no se requiere multi-proyecto ni patrones adicionales.
+requisitos; no se requiere multi-proyecto ni patrones adicionales. Este gate
+describe la aprobación del diseño. Las desviaciones de implementación
+identificadas posteriormente quedaron registradas y cerradas por T125–T131 en
+`tasks.md`, con evidencia detallada en el log de remediación.
 
 ## Project Structure
 
@@ -240,7 +251,12 @@ separación de responsabilidades y la independencia del proveedor (la capa LLM
 queda aislada tras `LLMBackend`). Las pruebas se organizan en `unit/`,
 `integration/` y `contract/` para cubrir testabilidad (principio III, SC-006).
 
-## Phase 0: Research (resumen)
+## SpecKit Design Stage 0: Research (resumen)
+
+Las etapas 0 y 1 siguientes pertenecen al proceso de diseño de SpecKit, no a
+la numeración del backlog de implementación. Las Implementation Phases 1–11
+están desglosadas en `tasks.md`; este plan solo añade secciones específicas
+cuando una ampliación posterior requiere una decisión arquitectónica.
 
 Consultar [`research.md`](research.md) para el detalle completo. Decisiones
 clave:
@@ -254,7 +270,7 @@ clave:
   formalizado y allowlist de rutas para mínimo privilegio.
 - **Testing**: `pytest`; determinismo garantizado por diseño de contrato.
 
-## Phase 1: Design (resumen)
+## SpecKit Design Stage 1: Design (resumen)
 
 ### Data model
 
@@ -299,7 +315,28 @@ Se re-evalúa el gate tras la fase de diseño:
 
 **Resultado**: APROBADO. El diseño no introduce complejidad injustificada.
 
-## Phase 14: Acciones destructivas (modificación del proyecto)
+## Implementation Phase 12: Bucle de razonamiento-acción formal
+
+US-11, FR-032..FR-036 y SC-015..SC-017 formalizan el comportamiento observable
+del bucle ya previsto por la arquitectura: plan explícito para solicitudes
+multietapa, selección y validación de herramientas, límite de pasos,
+observaciones reales y replanificación ante autorización denegada. No prescriben
+una librería ni exigen una arquitectura adicional; el bucle propio sigue siendo
+la solución aprobada.
+
+La autorización debe aplicarse a toda operación que ejecute código objetivo,
+incluso si se alcanza indirectamente desde otra ruta de análisis. El requisito
+es conductual y no obliga a crear una clase o gateway concreto.
+
+## Deferred Implementation Phase 13: US-12
+
+La conversación persistente, memoria, gestión de tareas y `.qa_sessions`
+(US-12, FR-037..FR-041 y SC-018..SC-020) no fueron aprobados en el spec y
+contradicen `Storage: N/A`. Se difieren fuera del MVP; no deben orientar tareas
+activas ni justificar la implementación existente hasta una decisión de
+producto futura.
+
+## Implementation Phase 14: Acciones destructivas (modificación del proyecto)
 
 Ampliación documentada en `spec.md` v1.2 (US-13, FR-042..FR-047, SC-021..SC-024)
 y en `docs/use-cases/UC-012.md`. Decisiones de diseño previstas (spec-first; la
@@ -333,7 +370,7 @@ autorización y respeta el perímetro); II (modularidad) se conserva (nuevas
 herramientas sin tocar el núcleo); VI (determinismo) y IX (honestidad) aplican
 igual que en el resto de herramientas. Sin violaciones de principios.
 
-## Phase 15: Profundidad de análisis (lectura de código)
+## Implementation Phase 15: Profundidad de análisis (lectura de código)
 
 Ampliación documentada e implementada en `spec.md` v1.3 (US-14, FR-048..FR-050,
 SC-025..SC-026), `docs/use-cases/UC-013.md` y las tareas Phase 15 de `tasks.md`

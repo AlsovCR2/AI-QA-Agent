@@ -958,33 +958,14 @@ visible por pasos** (FR-035 / SC-015). TDD obligatorio (rojo → verde).
 
 ---
 
-## Phase 13: Agente Conversacional con Memoria y Tareas (Chat Agent)
+## Alcance diferido: Phase 13 / US-12
 
-**Purpose**: Convertir el agente single-shot en un agente conversacional persistente que:
-- Mantiene historial de conversación entre turnos (contexto, referencias, decisiones)
-- Permite asignar y rastrear tareas con estado (pendiente/en_progreso/completada)
-- Persiste sesiones a disco (guardar/cargar) y permite reanudar
-- Responde en modo chat natural, no solo análisis QA puntual
-
-Decisiones de diseño:
-- **Memoria a corto plazo**: historial de la sesión actual (últimos N turnos + resumen)
-- **Memoria a largo plazo**: base de datos/archivos de sesiones previas, hechos aprendidos
-- **Gestión de tareas**: lista de tareas con estado, prioridad, asignación, dependencias
-- **Interfaz**: CLI interactivo tipo chat + API para integración
-- **Compatibilidad**: el bucle ReAct (Phase 12) sigue disponible para análisis QA profundos como "herramienta" del agente conversacional
-
-### Tareas Phase 13
-
-- [x] T085 [US-12] Modelo de conversación: `Conversacion` (turnos, resumen, hechos), `Turno` (usuario, agente, timestamp, herramienta usada), `Memoria` (hechos persistentes, preferencias)
-- [x] T086 [US-12] Persistencia de sesión: `SesionManager` guarda/carga `Conversacion` a JSON/BD (archivo por sesión, opción de BD SQLite), con `guardar()`, `cargar(id)`, `listar()`
-- [x] T087 [US-12] Gestión de tareas: `GestorTareas` con CRUD (crear, listar, actualizar estado, asignar, prioridad, etiquetas), persistencia ligada a la sesión
-- [x] T088 [US-12] Contexto conversacional en el bucle: `AgentConversacional` que inyecta historial reciente + resumen + tareas pendientes en `Intencion.contexto` antes de `planificar`, y actualiza memoria tras cada turno
-- [x] T089 [US-12] CLI interactivo tipo chat: REPL con prompt `> `, comandos `/tarea`, `/sesion`, `/memoria`, `/ayuda`, renderizado bonito de respuestas y razonamiento (reutiliza `_renderizar_respuesta`)
-- [x] T090 [US-12] Integración Phase 12: el agente conversacional usa el `Agent` ReAct como "herramienta analítica" cuando la intención es análisis QA (delegación), y responde directo para conversación general
-- [x] T091 [US-12] Tests: conversación multi-turno con FakeLLM, persistencia/carga de sesión, tareas CRUD, contexto inyectado en planificación
-- [x] T092 [US-12] Docs: actualizar `agent-reasoning-loop.md` con sección "Modo Conversacional", nuevo `use-cases/UC-011.md` (chat con tareas), `data-model.md` añadir entidades `Conversacion`, `Turno`, `Memoria`, `TareaAgente`
-- [x] T093 [US-12] Ejecución de tareas: `/tarea run <id>` convierte la tarea en una `Intencion` QA, la delega al bucle ReAct, marca `completada` (con evidencia) o `bloqueada` (sin evidencia) y guarda el resultado en `TareaAgente.resultado` (persistido con la sesión)
-- [x] T094 [US-12] Calidad de salida del ReAct para análisis de estructura: `explore` excluye directorios de ruido (`.git`, `.vs`, `bin`, `obj`, `packages`, `node_modules`) en cualquier nivel; `_acotar` del backend conserva cabecera y cola (no solo el inicio, que mostraba únicamente `.git`); el render CLI acota las salidas de herramientas en razonamiento e historial (`_acotar_render`). Verificado con LLM real: "analiza la estructura del proyecto" resume las capas reales sin volcar ruido.
+La conversación persistente, memoria, gestión de tareas y `.qa_sessions`
+(US-12, FR-037..FR-041 y SC-018..SC-020) no forman parte del spec aprobado y
+contradicen `Storage: N/A` del plan. Las anteriores T085-T094 se retiran del
+backlog activo como **SDD drift**; su estado histórico de implementación no las
+convierte en requisitos. T127 retiró su punto de entrada activo y evitó la
+creación implícita de `.qa_sessions`, sin formalizar ese alcance en el spec.
 
 ---
 
@@ -1007,10 +988,9 @@ Decisiones de diseño:
 - Verificación posterior con evidencia real (FR-047 / FR-019).
 - Enrutamiento determinista ampliado en `agent/router.py` y catálogo en
   `config.construir_herramientas` / `loop._parametros_para`.
-- Chat: la autorización human-in-the-loop se gestiona también en modo chat
-  (`_procesar_mensaje_chat` re-invoca con la decisión; `AgentConversacional.
-  atender` acepta `autorizacion` y no registra el turno mientras queda
-  pendiente, SC-004 / UC-006).
+- La autorización human-in-the-loop se aplica en el punto de entrada vigente
+  tanto al flujo de una pasada como al bucle ReAct. El antiguo chat persistente
+  de US-12 no es una superficie activa del MVP.
 
 ### Tareas Phase 14
 
@@ -1079,7 +1059,7 @@ Decisiones de diseño:
 - [x] T101 [US-13] Integración ReAct: las herramientas destructivas respetan validación
   de esquema, allowlist y autorización en `loop._ejecutar_siguiente_paso`; redacción
   de secretos en respuestas/historial (SC-008); re-planificación ante denegación (FR-036);
-  autorización en chat (`_procesar_mensaje_chat` + `AgentConversacional.atender`).
+  cualquier ruta activa debe preservar la misma frontera de autorización.
 
 **Condition of Done (T101)**:
 - [x] Una operación destructiva pendiente/denegada se suspende/omite sin ejecutarse.
@@ -1189,7 +1169,7 @@ Decisión de diseño:
 - [x] Sin límite explícito no cambia el comportamiento en proyectos normales.
 
 - [x] T109 [US-14] CLI: `_renderizar_respuesta` oculta el historial por defecto
-  (`mostrar_historial=False`) y se añade `--mostrar-historial` a `main` y `chat`
+  (`mostrar_historial=False`) y se añade `--mostrar-historial` a `main`
   (FR-050 / SC-007); el panel "Razonamiento" sigue trazando cada paso (FR-035).
 
 **Condition of Done (T109)**:
@@ -1229,17 +1209,6 @@ Decisión de diseño:
 - [x] Un paso idéntico ya ejecutado no vuelve a llamar a la herramienta (1 llamada, 1 acción EXITO).
 - [x] `razonar` recibe en contexto la herramienta de cada observación y prohíbe repetir pasos.
 - [x] Los tests de `pasos_max` usan pasos nuevos por iteración (el límite sigue probándose).
-
-- [x] T113 [US-14] Respuestas de conversación general no repetitivas: el prompt de
-  `openai_compatible_backend.responder` (rama sin observaciones) exige responder a la
-  pregunta concreta del turno, no repetir la respuesta anterior del asistente ni dar
-  plantillas, y enumerar capacidades reales si pregunta "qué puedes hacer" (FR-040/041).
-  `_responder_directo` (`conversational.py`) ya inyecta el historial (incluida la respuesta
-  previa) en la intención para que el LLM pueda evitarla.
-
-**Condition of Done (T113)**:
-- [x] La intención directa del 2º turno incluye la pregunta actual y la respuesta anterior.
-- [x] El prompt desaconseja repetir la respuesta previa y pide respuesta específica al turno.
 
 - [x] T114 [US-14] Trazabilidad fiel de lo ejecutado + localización inequívoca (regresión
   observada en sesión real con ReservaHotel): (a) `locate.ruta_relativa` ahora es relativa a
@@ -1370,6 +1339,61 @@ Decisión de diseño:
 - [x] Nota de cobertura al agotar el presupuesto en intenciones de pruebas.
 - [x] Suite completa verde.
 
+- [x] T122 [US-14] Profundidad determinista para una capa o carpeta concreta:
+  presupuesto acotado, exploración/lectura de archivos reales y nota honesta de
+  cobertura (FR-019, FR-024, FR-034, FR-049, SC-016, SC-026).
+
+- [x] T123 [US-14] Robustez de rutas y preservación de evidencia real en
+  lectura, escritura y análisis de capas, con regresiones deterministas
+  trazadas en `docs/trazabilidad.md` (FR-019, FR-025, FR-033, FR-048, FR-049).
+
+- [x] T124 [US-14] Corrección determinista de exploraciones a directorios reales
+  y fallback a capas existentes cuando una ruta planificada no existe
+  (FR-008, FR-019, FR-024, FR-049).
+
+---
+
+## Phase 16: Remediación de conformidad SDD
+
+Estas tareas corrigen únicamente incumplimientos de requisitos aprobados o
+retiran alcance no aprobado. No añaden sandbox, LangChain, memoria ni nuevas
+capacidades de producto.
+
+- [x] T125 [P0] Redactar toda evidencia, contexto y prompt antes de transmitirlo
+  a un LLM externo; demostrar con backend espía que ningún secreto crudo cruza
+  la frontera (FR-021, SC-008, constitución XI, contrato LLM).
+- [x] T126 [P0] Exigir autorización explícita antes de toda ejecución de código
+  objetivo, incluida cualquier invocación indirecta de `run_tests` o
+  `analyze_coverage`; pendiente/denegada no ejecuta subprocess (FR-015/016,
+  SC-004, constitución V). El requisito es conductual y no prescribe una clase
+  gateway.
+- [x] T127 [P0] Retirar o deshabilitar del MVP la persistencia conversacional,
+  gestión de tareas y creación de `.qa_sessions`, manteniendo `Storage: N/A`
+  (constitución XII/XIV y alcance aprobado del plan).
+- [x] T128 [P1] Corregir `GenerateTestCasesHerramienta` para cumplir el contrato
+  vigente de `LLMBackend` y propagar un error explícito en vez de devolver un
+  resultado vacío silencioso (FR-017/019/028/029, SC-013, constitución VII/IX).
+- [x] T129 [P1] Restaurar la sintaxis del CLI instalado definida por el contrato
+  y `quickstart.md`, incluyendo `--version`, `--ruta`, `--pregunta`, `--demo` y
+  `--mostrar-historial` en el punto de entrada documentado (FR-001/002/050).
+- [x] T130 [P1] Clasificar pruebas y cobertura por `returncode` y salida real,
+  distinguiendo comando fallido, herramienta no disponible, cero pruebas y
+  ejecución exitosa (FR-013/017/018/031, SC-005/014, constitución VII/IX).
+  Evidencia de cierre T125–T130:
+  - T125: tests/unit/test_remediation_security.py — 22 relacionadas PASS.
+  - T126: tests/unit/test_remediation_security.py — 6 focales y 40 relacionadas PASS.
+  - T127: tests/unit/test_remediation_security.py y suite US-11/ReAct — 3 focales y 116 relacionadas PASS.
+  - T128: tests/unit/test_tools_generate_cases.py y contratos — 13 relacionadas PASS.
+  - T129: tests/integration/test_cli_contract.py — 5 E2E PASS, incluido entry point instalado.
+  - T130: tests/unit/test_remediation_subprocess_semantics.py — 14 focales y 40 relacionadas PASS.
+- [x] T131 [P1] Ejecutar regresiones de T125-T130 y la suite completa; registrar
+  por separado PASS, FAIL, SKIPPED y UNAVAILABLE, sin presentar mocks como
+  garantía de aislamiento real.
+  Evidencia: PASS — 45 focales, 354 suite completa, pip check, CLI E2E,
+  speckit-analyze y git diff --check; FAIL — 0; SKIPPED — 0;
+  UNAVAILABLE — 0 dentro del alcance aprobado. Aislamiento/sandbox: N/A,
+  fuera del MVP de repositorios objetivo de confianza.
+
 ## Notes
 
 - [P] tasks = different files, no dependencies
@@ -1379,7 +1403,11 @@ Decisión de diseño:
 - Commit after each task or logical group
 - Stop at any checkpoint to validate story independently
 - Avoid: vague tasks, same file conflicts, cross-story dependencies that break independence
-- **Cobertura de requerimientos**: FR-001..FR-031 cubiertos (véase T052); SC-001..SC-014 verificados; principios constitución I..XIV aplicados. Ampliación multi-lenguaje y robustez LLM documentada en Phase 11 (T070-T074). Bucle de razonamiento-acción (agente, no chatbot) definido en Phase 12 (T076-T084) y en `agent-reasoning-loop.md`. Agente conversacional con memoria y tareas (chat) implementado en Phase 13 (T085-T092) y documentado en `agent-reasoning-loop.md` §12 + `use-cases/UC-011.md`. **Acciones destructivas** (crear/editar/eliminar) especificadas e implementadas en Phase 14 (T095-T103) y documentadas en `spec.md` v1.2 (US-13, FR-042..047, SC-021..024), `plan.md` §Phase 14, `use-cases/UC-012.md`, `contracts/tool-contracts.md` y `data-model.md` (entidad `Backup`). **Profundidad de análisis** (lectura de código) especificada e implementada en Phase 15 (T104-T115) y documentada en `spec.md` v1.3 (US-14, FR-048..050, SC-025..026) y `use-cases/UC-013.md`. **Profundidad de análisis optimizada** para el modelo actual (decisión aprobada): presupuesto dinámico + enriquecimiento determinista por capa + nota de cobertura (T116-T118, Phase 15). **Robustez del `responder`** y honestidad del error del proveedor (T119, Phase 15). **Amplitud del detector de análisis global** (T120, Phase 15). **Sugerencia de pruebas como análisis exhaustivo** (T121, Phase 15). No quedan acciones ni requerimientos no funcionales sin su correspondiente task.
+- **Cobertura de requerimientos**: US-11/FR-032..036/SC-015..017 quedan
+  formalizados en spec v1.4 y trazados en Phase 12. US-12/FR-037..041/
+  SC-018..020 y la persistencia asociada quedan diferidos. Las desviaciones
+  verificadas de seguridad, contrato y CLI quedaron cerradas por T125-T131 con
+  la evidencia enlazada en Phase 16 y en el log de remediación.
 
 ## Condiciones de Terminación (Checklists) Consolidado
 

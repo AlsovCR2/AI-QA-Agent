@@ -38,6 +38,10 @@ auditoría (VIII / FR-020 / SC-007).
   (UC-006 / FR-015/016). Antes de ejecutar una acción sensible, el agente
   suspende la ejecución y solicita `autorizada`. Si `denegada`, no ejecuta y
   notifica (SC-004).
+- Toda operación que ejecute código objetivo (`run_tests` y
+  `analyze_coverage`) es sensible y debe atravesar esta autorización, incluso
+  cuando otra ruta de análisis la invoque indirectamente. El contrato exige el
+  comportamiento no el uso de una clase gateway concreta.
 
 ## Redacción de secretos
 
@@ -71,4 +75,11 @@ directorio de proyecto, apuntando a la raíz del proyecto sobre el que se trabaj
 | `--ruta <dir>` | Raíz del proyecto a analizar (default: `cwd`). |
 | `--pregunta "<texto>"` | Consulta puntual; omite el REPL y salta a respuesta (modo no interactivo). |
 | `--demo` | Fuerza `FakeLLM` sin API key (validación sin LLM real). |
+| `--mostrar-historial` | Muestra la tabla del historial de acciones; permanece oculta por defecto (FR-050). |
 | `--version` | Muestra la versión instalada. |
+
+El punto de entrada aprobado no registra subcomandos. En particular,
+`qa-agent chat` no forma parte del MVP: la conversación persistente, memoria,
+tareas y `.qa_sessions` pertenecen a US-12, que permanece diferida. El modo
+interactivo vigente se inicia directamente con `qa-agent --ruta <dir>` y
+mantiene únicamente estado efímero durante el proceso.

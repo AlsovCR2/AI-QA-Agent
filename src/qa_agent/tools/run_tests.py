@@ -415,7 +415,7 @@ class RunTestsHerramienta(Herramienta):
         if not ruta.exists():
             return ResultadoDeHerramienta(
                 herramienta_id=self.id,
-                estado=EstadoResultado.EXITO,
+                estado=EstadoResultado.ERROR,
                 datos={
                     "pasadas": 0,
                     "falladas": 0,
@@ -424,6 +424,7 @@ class RunTestsHerramienta(Herramienta):
                     "estado_global": "no_ejecutado",
                     "detalle_fallos": [],
                 },
+                error="La ruta del proyecto no existe; las pruebas no se ejecutaron.",
             )
 
         # Ejecutar comando
@@ -469,6 +470,49 @@ class RunTestsHerramienta(Herramienta):
 
         # Parsear salida
         datos = self._parsear_salida(salida_completa, comando_pruebas)
+
+        estado_global = datos.get("estado_global")
+        salida_normalizada = salida_completa.lower()
+        cero_tests_explicito = any(
+            marca in salida_normalizada
+            for marca in (
+                "no tests ran",
+                "collected 0 items",
+                "no tests found",
+                "no test is available",
+            )
+        )
+        fallo_de_tests_valido = (
+            estado_global == "fallo"
+            and resultado_proc.returncode in {0, 1}
+        )
+        exito_valido = (
+            estado_global == "exito"
+            and resultado_proc.returncode == 0
+        )
+        cero_tests_valido = (
+            estado_global == "no_ejecutado"
+            and cero_tests_explicito
+            and resultado_proc.returncode in {0, 5}
+        )
+
+        if not (fallo_de_tests_valido or exito_valido or cero_tests_valido):
+            return ResultadoDeHerramienta(
+                herramienta_id=self.id,
+                estado=EstadoResultado.ERROR,
+                datos={
+                    "pasadas": 0,
+                    "falladas": 0,
+                    "errores": 0,
+                    "total": 0,
+                    "estado_global": "no_ejecutado",
+                    "detalle_fallos": [],
+                },
+                error=(
+                    "La ejecución de pruebas no produjo un resultado "
+                    f"compatible (returncode={resultado_proc.returncode})."
+                ),
+            )
 
         return ResultadoDeHerramienta(
             herramienta_id=self.id,

@@ -215,7 +215,7 @@ def test_agente_analyze_coverage_real_con_resultado_real(tmp_path):
             allowlist=None,
             redactor=Redactor(),
         )
-        respuesta = agente.atender("analiza la cobertura")
+        respuesta = agente.atender("analiza la cobertura", autorizacion=True)
 
     assert respuesta.basada_en_herramientas
     accion = [
@@ -254,7 +254,10 @@ def test_agente_analyze_test_results_encadena_run_tests(proyecto_ejemplo):
             allowlist=Allowlist([proyecto_ejemplo]),
             redactor=Redactor(),
         )
-        respuesta = agente.atender("analiza estos resultados de prueba")
+        respuesta = agente.atender(
+            "analiza estos resultados de prueba",
+            autorizacion=True,
+        )
 
     assert respuesta.basada_en_herramientas
     accion_atr = [

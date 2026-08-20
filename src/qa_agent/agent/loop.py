@@ -455,7 +455,7 @@ class Agent:
         # Fallback: delegación al LLMBackend
         catalogo = list(self._herramientas.values())
         seleccion = self._backend.seleccionar_herramienta(
-            {"texto": solicitud_texto}, catalogo
+            self._redactor.redactar({"texto": solicitud_texto}), catalogo
         )
         if not isinstance(seleccion, dict):
             return None
@@ -968,8 +968,20 @@ class Agent:
 
         herramienta = self._herramientas[herramienta_id]
 
+        # analyze_test_results es determinista si recibe resultados, pero esta
+        # ruta de una pasada los obtiene ejecutando run_tests en
+        # _parametros_para; por eso hereda su frontera antes de construir
+        # parámetros (T126 / FR-015/016).
+        requiere_autorizacion = (
+            herramienta.requiere_autorizacion
+            or (
+                herramienta.id == "analyze_test_results"
+                and "run_tests" in self._herramientas
+            )
+        )
+
         # Acción sensible → suspender y solicitar autorización (FR-015/016).
-        if herramienta.requiere_autorizacion:
+        if requiere_autorizacion:
             accion = self._autorizaciones.crear(
                 id=f"a{self._indice_solicitud}",
                 descripcion=(
@@ -1084,14 +1096,14 @@ class Agent:
             EstadoAccion.EXITO,
         )
 
-        if herramienta.requiere_autorizacion:
+        if requiere_autorizacion:
             # Comando autorizado ejecutado → autorizada → ejecutada (data-model).
             self._autorizaciones.marcar_ejecutada(f"a{self._indice_solicitud}")
 
         # Generar la respuesta basada en el resultado real validado (FR-004).
         respuesta_generada = self._backend.generar_respuesta(
-            {"texto": texto, "id": solicitud_id},
-            [resultado],
+            self._redactor.redactar({"texto": texto, "id": solicitud_id}),
+            self._redactor.redactar([resultado]),
         )
         if not isinstance(respuesta_generada, dict):
             respuesta_generada = {}
@@ -1163,7 +1175,9 @@ class Agent:
             intencion.contexto.update(contexto)
         try:
             plan = self._backend.planificar(
-                intencion, list(self._herramientas.values()), intencion.contexto
+                self._redactor.redactar(intencion),
+                list(self._herramientas.values()),
+                self._redactor.redactar(intencion.contexto),
             )
         except Exception:  # noqa: BLE001 - degradar sin romper el agente
             plan = None
@@ -1212,7 +1226,8 @@ class Agent:
                     ):
                         try:
                             replan = self._backend.razonar(
-                                estado, plan.pendientes
+                                self._redactor.redactar(estado),
+                                self._redactor.redactar(plan.pendientes),
                             )
                         except Exception:  # noqa: BLE001
                             replan = None
@@ -1233,7 +1248,8 @@ class Agent:
                 else:
                     try:
                         siguiente = self._backend.razonar(
-                            estado, plan.pendientes
+                            self._redactor.redactar(estado),
+                            self._redactor.redactar(plan.pendientes),
                         )
                     except Exception:  # noqa: BLE001
                         siguiente = None
@@ -1261,7 +1277,8 @@ class Agent:
                 if not plan.pendientes or estado.excedio_pasos_max():
                     try:
                         evaluacion = self._backend.evaluar(
-                            estado, observaciones
+                            self._redactor.redactar(estado),
+                            self._redactor.redactar(observaciones),
                         )
                     except Exception:  # noqa: BLE001
                         evaluacion = {"satisfecha": False, "razon": ""}
@@ -1808,7 +1825,8 @@ class Agent:
         error_respuesta = ""
         try:
             respuesta_generada = self._backend.responder(
-                observaciones, intencion_para_responder
+                self._redactor.redactar(observaciones),
+                self._redactor.redactar(intencion_para_responder),
             )
         except Exception as error:  # noqa: BLE001
             # Honestidad (IX / FR-019): un fallo del proveedor LLM no se traga

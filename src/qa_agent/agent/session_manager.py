@@ -26,9 +26,9 @@ class SesionManager:
 
     def __init__(self, base_dir: str | Path | None = None, usar_sqlite: bool = False):
         self.base_dir = Path(base_dir or os.getenv("QA_AGENT_SESSIONS", "./.qa_sessions"))
-        self.base_dir.mkdir(parents=True, exist_ok=True)
         self.usar_sqlite = usar_sqlite
         if usar_sqlite:
+            self.base_dir.mkdir(parents=True, exist_ok=True)
             self._init_sqlite()
 
     def _ruta_archivo(self, sesion_id: str) -> Path:
@@ -68,6 +68,7 @@ class SesionManager:
             conn.commit()
             conn.close()
         else:
+            self.base_dir.mkdir(parents=True, exist_ok=True)
             ruta = self._ruta_archivo(conversacion.id)
             ruta.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
 

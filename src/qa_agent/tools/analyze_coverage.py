@@ -97,7 +97,9 @@ class AnalyzeCoverageHerramienta(Herramienta):
         },
         "required": ["cobertura_global", "por_archivo", "estado"],
     }
-    requiere_autorizacion = False
+    # Obtener cobertura ejecuta código del repositorio objetivo; aplica la
+    # misma frontera humana que run_tests (FR-015/016, principio V).
+    requiere_autorizacion = True
 
     def __init__(self, rutas_permitidas: list[str] | None = None) -> None:
         if rutas_permitidas is None:
@@ -349,12 +351,13 @@ class AnalyzeCoverageHerramienta(Herramienta):
         if not ruta.exists():
             return ResultadoDeHerramienta(
                 herramienta_id=self.id,
-                estado=EstadoResultado.EXITO,
+                estado=EstadoResultado.ERROR,
                 datos={
                     "cobertura_global": 0.0,
                     "por_archivo": [],
                     "estado": "no_ejecutado",
                 },
+                error="La ruta del proyecto no existe; la cobertura no se ejecutó.",
             )
 
         # Ejecutar comando
@@ -393,6 +396,42 @@ class AnalyzeCoverageHerramienta(Herramienta):
 
         # Parsear salida
         datos = self._parsear_salida(salida_completa, ruta)
+
+        salida_normalizada = salida_completa.lower()
+        cero_tests_explicito = any(
+            marca in salida_normalizada
+            for marca in (
+                "no tests ran",
+                "collected 0 items",
+                "no tests found",
+                "no test is available",
+            )
+        )
+        if (
+            datos.get("estado") == "no_ejecutado"
+            and cero_tests_explicito
+            and resultado_proc.returncode in {0, 5}
+        ):
+            return ResultadoDeHerramienta(
+                herramienta_id=self.id,
+                estado=EstadoResultado.EXITO,
+                datos=datos,
+            )
+
+        if resultado_proc.returncode != 0 or datos.get("estado") != "exito":
+            return ResultadoDeHerramienta(
+                herramienta_id=self.id,
+                estado=EstadoResultado.ERROR,
+                datos={
+                    "cobertura_global": 0.0,
+                    "por_archivo": [],
+                    "estado": "error",
+                },
+                error=(
+                    "La ejecución de cobertura no produjo un resultado "
+                    f"compatible (returncode={resultado_proc.returncode})."
+                ),
+            )
 
         return ResultadoDeHerramienta(
             herramienta_id=self.id,

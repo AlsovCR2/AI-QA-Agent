@@ -182,6 +182,10 @@ autorizado (UC-005).
 
 **Reglas**
 - Solo ejecuta sobre **conjuntos autorizados** (FR-012, FR-025, SC-011).
+- Ejecutar pruebas es una acción sensible porque ejecuta código objetivo. El
+  agente debe obtener autorización explícita antes de invocar esta herramienta,
+  incluso cuando la invocación se origine desde una ruta de análisis
+  (`analyze_test_results`) (FR-015/016, SC-004).
 - Reporta el **estado real** de la ejecución (FR-013, SC-002).
 - Los fallos se reportan explícitamente y las causas se delimitan a lo que la
   evidencia sustenta (FR-014). No se atribuyen causas no respaldadas (UC-007).
@@ -238,6 +242,9 @@ fallos, errores y tendencias, delimitando causas a lo que la evidencia sustenta
 - Las `posible_causa` se limitan a lo que la evidencia sustenta; si no hay
   evidencia, se indica "sin evidencia suficiente" (FR-014, UC-007).
 - Solo usa resultados y rutas reales; nunca inventa fallos ni causas (FR-019).
+- Si esta capacidad necesita obtener resultados ejecutando `run_tests`, la
+  autorización de ejecución sigue siendo obligatoria; el análisis no puede
+  omitir ni heredar implícitamente una autorización inexistente (FR-015/016).
 
 ---
 
@@ -321,9 +328,14 @@ reportando cobertura real por archivo/módulo (SC-006/SC-003 transversales).
 **Reglas**
 - Solo ejecuta comandos autorizados y acotados (`comando_cobertura`) dentro de
   una allowlist de comandos seguros (FR-025, SC-011, IV).
+- Ejecutar cobertura es una acción sensible porque ejecuta código objetivo; la
+  herramienta requiere autorización explícita previa (FR-015/016, SC-004).
 - Reporta cobertura **real** (FR-019, SC-002); si no puede ejecutarse
   (`estado == no_ejecutado`), se informa explícitamente (FR-017/018).
 - Determinística (VI / SC-010).
+- `run_tests` y `analyze_coverage` operan sobre repositorios de confianza y
+  ejecutan en el host. Este contrato no ofrece aislamiento de proceso, red,
+  credenciales ni filesystem.
 
 ---
 
