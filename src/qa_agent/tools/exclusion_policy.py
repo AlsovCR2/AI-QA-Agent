@@ -5,8 +5,9 @@ Antes de este módulo, los mismos directorios "de ruido" (VCS, artefactos de
 build, dependencias, entornos virtuales, configuración de IDE) estaban
 definidos por separado en `allowlist.py`, `explore.py` y
 `generate_test_cases.py` (además de una copia de solo lectura en
-`agent/loop.py`, fuera del alcance de este cambio). `locate.py` y
-`search.py` reutilizaban únicamente el set de `explore.py`.
+`agent/loop.py`, inicialmente fuera del alcance de este cambio — cableado
+más tarde, ver nota "Cierre de cableado (I-3)" al final de este docstring).
+`locate.py` y `search.py` reutilizaban únicamente el set de `explore.py`.
 
 Este módulo unifica esas definiciones en un único lugar. Conviven dos
 mecanismos porque resuelven problemas distintos:
@@ -54,6 +55,18 @@ elemento descubierto (solo para la ruta raíz), así que sigue sin podar
 limitación preexistente (no introducida por I07) que queda fuera de este
 alcance — corregirla requeriría cambiar el algoritmo de recorrido de
 `explore.py`, no solo centralizar constantes duplicadas.
+
+Cierre de cableado (I-3, revisión final post-integración): `agent/loop.py`
+mantenía dos copias inline del set estrecho pre-I07
+(`{.git, .vs, bin, obj, packages, node_modules}`) en
+`Agent._buscar_archivo_por_nombre` / `_buscar_directorio_por_nombre`, con
+comentarios que afirmaban paridad con `explore`/`_resolver_capa_real` — cierto
+cuando se escribieron, falso después de que este módulo ampliara el set de
+`explore`. Ambos puntos ahora llaman a `es_directorio_excluido()` (arriba),
+por lo que `loop.py` usa exactamente la misma política que
+`explore`/`locate`/`search`/`generate_test_cases`. Esto amplía lo que
+`loop.py` excluía (añade `__pycache__`, `.venv`, `venv`, `.idea`, `.vscode`),
+consistente con la decisión de unión-nunca-reducción del RULING 1 anterior.
 """
 
 from __future__ import annotations
@@ -103,12 +116,9 @@ PATRONES_EXCLUSION_ALLOWLIST: tuple[str, ...] = (
 
 def es_directorio_excluido(nombre: str) -> bool:
     """True si `nombre` (nombre de un directorio, no una ruta completa)
-    debe excluirse del recorrido de descubrimiento en cualquier nivel."""
+    debe excluirse del recorrido de descubrimiento en cualquier nivel.
+
+    Usado por `explore`/`locate`/`search`/`generate_test_cases` y por
+    `agent.loop.Agent._buscar_archivo_por_nombre` /
+    `_buscar_directorio_por_nombre` (I-3, cierre del cableado I07)."""
     return nombre in NOMBRES_DIRECTORIO_EXCLUIDOS
-
-
-def contiene_directorio_excluido(partes: tuple[str, ...] | list[str]) -> bool:
-    """True si alguna de las `partes` de una ruta relativa coincide con un
-    directorio excluido (usado para filtrar archivos ya descubiertos vía
-    `rglob`, cuyo camino completo hay que revisar componente a componente)."""
-    return any(parte in NOMBRES_DIRECTORIO_EXCLUIDOS for parte in partes)

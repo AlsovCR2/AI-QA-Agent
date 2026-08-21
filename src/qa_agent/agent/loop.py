@@ -73,6 +73,7 @@ from qa_agent.tools.base import (
     validar_resultado,
     validar_resultado_esquema,
 )
+from qa_agent.tools.exclusion_policy import es_directorio_excluido
 
 
 # Análisis global del proyecto (FR-049): presupuesto ampliado de pasos para
@@ -844,15 +845,16 @@ class Agent:
         """Primer archivo REAL con ese nombre dentro del perímetro (T123).
 
         Recorrido del árbol autorizado (FR-025) ignorando artefactos de
-        build/control de versiones y directorios ocultos (igual que
-        `explore`/`_resolver_capa_real`); coincidencia case-insensitive.
-        Determinista y sin LLM (VI / SC-010). Devuelve `None` si no existe
-        ningún archivo con ese nombre.
+        build/control de versiones y directorios ocultos, usando la misma
+        política centralizada de exclusión de directorios que `explore`,
+        `locate`, `search` y `generate_test_cases`
+        (`qa_agent.tools.exclusion_policy.NOMBRES_DIRECTORIO_EXCLUIDOS`, I07);
+        coincidencia case-insensitive. Determinista y sin LLM (VI / SC-010).
+        Devuelve `None` si no existe ningún archivo con ese nombre.
         """
         base = Path(self._ruta_base())
         if not base.is_dir():
             return None
-        ignorados = {".git", ".vs", "bin", "obj", "packages", "node_modules"}
         por_visitar = [base]
         while por_visitar:
             actual = por_visitar.pop(0)
@@ -861,7 +863,7 @@ class Agent:
             except OSError:
                 continue
             for hijo in hijos:
-                if hijo.name in ignorados or (
+                if es_directorio_excluido(hijo.name) or (
                     hijo.is_dir() and hijo.name.startswith(".")
                 ):
                     continue
@@ -874,16 +876,18 @@ class Agent:
     def _buscar_directorio_por_nombre(self, nombre: str) -> Path | None:
         """Primer directorio REAL con ese nombre dentro del perímetro (T124).
 
-        Análogo a `_buscar_archivo_por_nombre` para `explore`: recorre el árbol
-        autorizado (FR-025) ignorando artefactos de build/control de versiones
-        y directorios ocultos; coincidencia case-insensitive. Determinista y
-        sin LLM (VI / SC-010). Devuelve `None` si no existe ningún directorio
-        con ese nombre.
+        Análogo a `_buscar_archivo_por_nombre`: recorre el árbol autorizado
+        (FR-025) ignorando artefactos de build/control de versiones y
+        directorios ocultos, usando la misma política centralizada de
+        exclusión de directorios que `explore`, `locate`, `search` y
+        `generate_test_cases`
+        (`qa_agent.tools.exclusion_policy.NOMBRES_DIRECTORIO_EXCLUIDOS`, I07);
+        coincidencia case-insensitive. Determinista y sin LLM (VI / SC-010).
+        Devuelve `None` si no existe ningún directorio con ese nombre.
         """
         base = Path(self._ruta_base())
         if not base.is_dir():
             return None
-        ignorados = {".git", ".vs", "bin", "obj", "packages", "node_modules"}
         por_visitar = [base]
         while por_visitar:
             actual = por_visitar.pop(0)
@@ -892,7 +896,7 @@ class Agent:
             except OSError:
                 continue
             for hijo in hijos:
-                if hijo.name in ignorados or (
+                if es_directorio_excluido(hijo.name) or (
                     hijo.is_dir() and hijo.name.startswith(".")
                 ):
                     continue
