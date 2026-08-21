@@ -10,15 +10,31 @@ Determinística (VI / SC-010).
 from __future__ import annotations
 
 import re
-import subprocess
+import sys
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote, urlparse
 
 from qa_agent.tools.allowlist import Allowlist
 from qa_agent.tools.base import (
     EstadoResultado,
     Herramienta,
     ResultadoDeHerramienta,
+)
+from qa_agent.tools.ejecucion import (
+    CAUSAS,
+    COMANDO_NO_PERMITIDO,
+    EJECUTADO,
+    ERROR_DE_EJECUCION,
+    REPORTE_NO_ENCONTRADO,
+    RUNNER_NO_DISPONIBLE,
+    RUTA_INVALIDA,
+    SIN_PRUEBAS,
+    TIMEOUT,
+    MetadatosDeEjecucion,
+    clasificar_salida,
+    ejecutar_comando,
+    metadatos_sin_ejecutar,
 )
 
 
@@ -45,7 +61,87 @@ _COMANDOS_COBERTURA_PERMITIDOS = {
     # Maven / Java: genera target/site/jacoco/jacoco.xml
     "mvn test jacoco:report",
     "mvn test jacoco:report -q",
+    # JS/TS: se delega en el script del proyecto igual que en `run_tests`.
+    "npm test -- --coverage",
+    "npm run coverage",
+    "yarn test --coverage",
+    "pnpm test --coverage",
+    # Go: cobertura integrada en la toolchain.
+    "go test ./... -cover",
+    "go test ./... -coverprofile=coverage.out",
 }
+
+
+# Cobertura ejecuta toda la suite además de instrumentarla: necesita más
+# presupuesto de tiempo que `run_tests`.
+TIMEOUT_COBERTURA_SEGUNDOS = 180
+
+
+def _datos_sin_cobertura(
+    metadatos: MetadatosDeEjecucion, estado: str
+) -> dict[str, Any]:
+    """Resultado sin cobertura medida, acompañado de la causa (FR-107)."""
+    return {
+        "cobertura_global": 0.0,
+        "por_archivo": [],
+        "estado": estado,
+        **metadatos.como_dict(),
+    }
+
+
+_MENSAJE_POR_CAUSA = {
+    TIMEOUT: "Timeout: la ejecución de cobertura excedió el tiempo permitido.",
+    RUNNER_NO_DISPONIBLE: (
+        "La herramienta de cobertura no está disponible en este entorno; "
+        "la cobertura no se midió."
+    ),
+    ERROR_DE_EJECUCION: "Error del sistema al ejecutar el comando de cobertura.",
+    RUTA_INVALIDA: "La ruta del proyecto no es válida; la cobertura no se ejecutó.",
+    COMANDO_NO_PERMITIDO: "El comando de cobertura no está permitido.",
+    REPORTE_NO_ENCONTRADO: (
+        "El comando de cobertura terminó correctamente pero no se localizó "
+        "ningún informe de cobertura que analizar."
+    ),
+    SIN_PRUEBAS: (
+        "El comando de cobertura se ejecutó pero el proyecto no tiene pruebas "
+        "que medir."
+    ),
+}
+
+
+def _ruta_desde_referencia(referencia: str) -> Path | None:
+    """Convierte una referencia de reporte impresa por un runner en una `Path`.
+
+    Los plugins de cobertura anuncian el informe generado de formas distintas:
+    ruta desnuda (`target/site/jacoco/jacoco.xml`), URI POSIX
+    (`file:///home/u/p/jacoco.xml`) o URI de Windows
+    (`file:///C:/proj/jacoco.xml`). Se normaliza el esquema `file:` y se deja
+    que `Path` interprete los separadores de forma nativa: reescribir `/` a `\\`
+    incondicionalmente resolvía solo en Windows (FR-102).
+
+    Devuelve `None` si la referencia no puede interpretarse como ruta.
+    """
+    texto = referencia.strip().strip("'\"")
+    if not texto:
+        return None
+    if texto.lower().startswith("file:"):
+        partes = urlparse(texto)
+        ruta = unquote(partes.path)
+        if re.fullmatch(r"[A-Za-z]:", partes.netloc or ""):
+            # "file://C:/proj/…" — algunos plugins de Windows emiten la letra
+            # de unidad como autoridad del URI.
+            ruta = f"{partes.netloc}{ruta}"
+        elif re.match(r"^/[A-Za-z]:", ruta):
+            # "file:///C:/proj/…" — la barra inicial delante de la letra de
+            # unidad es espuria fuera del URI.
+            ruta = ruta[1:]
+        texto = ruta
+    if not texto:
+        return None
+    try:
+        return Path(texto).expanduser()
+    except (OSError, ValueError):
+        return None
 
 
 class AnalyzeCoverageHerramienta(Herramienta):
@@ -94,6 +190,14 @@ class AnalyzeCoverageHerramienta(Herramienta):
                 "type": "string",
                 "enum": ["exito", "error", "no_ejecutado"],
             },
+            # Metadatos de ejecución (T209 / FR-107). Aditivos: no entran en
+            # `required` para preservar la compatibilidad de ADR-002 (FR-109).
+            "exit_code": {"type": "integer"},
+            "runner_detectado": {"type": "string"},
+            "duracion_ms": {"type": "integer"},
+            "stdout_tail": {"type": "string"},
+            "stderr_tail": {"type": "string"},
+            "causa_no_ejecutado": {"type": "string", "enum": list(CAUSAS)},
         },
         "required": ["cobertura_global", "por_archivo", "estado"],
     }
@@ -113,15 +217,25 @@ class AnalyzeCoverageHerramienta(Herramienta):
     def _normalizar_comando(self, comando: str) -> list[str]:
         """Normaliza el comando para ejecución segura."""
         cmd = comando.strip()
+        # `&&` no es un operador cuando se ejecuta con shell=False (IV): sería
+        # un argumento literal para pytest. Los comandos compuestos de la
+        # allowlist se recortan a su primer tramo, que es el que produce los
+        # datos de cobertura; el segundo (`coverage report`) solo re-imprime lo
+        # ya medido y su ausencia se cubre por el parseo del informe XML.
+        if "&&" in cmd:
+            cmd = cmd.split("&&", 1)[0].strip()
+        # Igual que en `run_tests`: se usa el intérprete ACTUAL, nunca el
+        # literal "python", que no existe en macOS ni en distribuciones que
+        # solo instalan `python3` (FR-101).
         if cmd.startswith("pytest "):
             partes = cmd.split()
-            return ["python", "-m"] + partes
+            return [sys.executable, "-m"] + partes
         elif cmd.startswith("coverage "):
             # coverage puede no estar disponible como comando directo
             partes = cmd.split()
-            return ["python", "-m"] + partes
+            return [sys.executable, "-m"] + partes
         elif cmd.startswith("python -m pytest"):
-            return cmd.split()
+            return [sys.executable] + cmd.split()[1:]
         else:
             return cmd.split()
 
@@ -146,8 +260,10 @@ class AnalyzeCoverageHerramienta(Herramienta):
             match = patron_linea.match(linea)
             if match:
                 archivo = match.group(1)
-                stmts = int(match.group(2))
-                miss = int(match.group(3))
+                # Los grupos 2 y 3 (sentencias totales y no cubiertas) los
+                # captura el patrón para anclar el formato de la tabla, pero el
+                # esquema de salida solo expone el porcentaje y las líneas
+                # faltantes; no se ligan a variables para no sugerir que se usan.
                 cobertura = int(match.group(4))
 
                 # Calcular líneas faltantes aproximadas (no disponibles en term simple)
@@ -212,21 +328,30 @@ class AnalyzeCoverageHerramienta(Herramienta):
                         "estado": "error",
                     }
 
-        # maven: localizar jacoco.xml en la salida (file://<ruta>/jacoco.xml)
+        # maven: localizar jacoco.xml. Se intenta primero la referencia impresa
+        # en la salida (`file://<ruta>/jacoco.xml`) y, si no resuelve, la
+        # ubicación convencional del plugin bajo la raíz del proyecto. La
+        # referencia del stdout NO se reescribe cambiando separadores: eso solo
+        # funcionaba en Windows y rompía la resolución en POSIX (FR-102).
+        candidatos: list[Path] = []
         m_jacoco = re.search(r"([^\s]+jacoco\.xml)", salida)
         if m_jacoco:
-            ruta_xml = m_jacoco.group(1).split("//", 1)[-1]
-            ruta_xml = ruta_xml.replace("/", "\\")
-            ruta_xml = Path(ruta_xml).expanduser().resolve()
-            if ruta_xml.exists():
-                try:
-                    return self._parsear_jacoco_xml(ruta_xml.read_text(encoding="utf-8"))
-                except Exception:
-                    return {
-                        "cobertura_global": 0.0,
-                        "por_archivo": [],
-                        "estado": "error",
-                    }
+            referencia = _ruta_desde_referencia(m_jacoco.group(1))
+            if referencia is not None:
+                candidatos.append(referencia)
+        candidatos.append(ruta_proyecto / "target" / "site" / "jacoco" / "jacoco.xml")
+
+        for ruta_xml in candidatos:
+            if not ruta_xml.exists():
+                continue
+            try:
+                return self._parsear_jacoco_xml(ruta_xml.read_text(encoding="utf-8"))
+            except Exception:
+                return {
+                    "cobertura_global": 0.0,
+                    "por_archivo": [],
+                    "estado": "error",
+                }
 
         # Fallback: formato terminal (pytest-cov / coverage.py)
         return self._parsear_cobertura_term(salida)
@@ -328,7 +453,9 @@ class AnalyzeCoverageHerramienta(Herramienta):
             return ResultadoDeHerramienta(
                 herramienta_id=self.id,
                 estado=EstadoResultado.ERROR,
-                datos={},
+                datos=metadatos_sin_ejecutar(
+                    RUTA_INVALIDA, comando_cobertura
+                ).como_dict(),
                 error=(
                     "La ruta solicitada queda fuera de las rutas autorizadas "
                     "(FR-025)."
@@ -340,7 +467,9 @@ class AnalyzeCoverageHerramienta(Herramienta):
             return ResultadoDeHerramienta(
                 herramienta_id=self.id,
                 estado=EstadoResultado.INVALIDO,
-                datos={},
+                datos=metadatos_sin_ejecutar(
+                    COMANDO_NO_PERMITIDO, comando_cobertura
+                ).como_dict(),
                 error=(
                     f"Comando de cobertura no permitido: '{comando_cobertura}'. "
                     "Solo se permiten comandos de la allowlist segura (SC-011)."
@@ -352,87 +481,73 @@ class AnalyzeCoverageHerramienta(Herramienta):
             return ResultadoDeHerramienta(
                 herramienta_id=self.id,
                 estado=EstadoResultado.ERROR,
-                datos={
-                    "cobertura_global": 0.0,
-                    "por_archivo": [],
-                    "estado": "no_ejecutado",
-                },
+                datos=_datos_sin_cobertura(
+                    metadatos_sin_ejecutar(RUTA_INVALIDA, comando_cobertura),
+                    "no_ejecutado",
+                ),
                 error="La ruta del proyecto no existe; la cobertura no se ejecutó.",
             )
 
-        # Ejecutar comando
-        try:
-            cmd_parts = self._normalizar_comando(comando_cobertura)
-            resultado_proc = subprocess.run(
-                cmd_parts,
-                cwd=str(ruta),
-                capture_output=True,
-                text=True,
-                timeout=180,  # Timeout 3 minutos para cobertura
-            )
-            salida_completa = resultado_proc.stdout + "\n" + resultado_proc.stderr
-        except subprocess.TimeoutExpired:
+        proceso, metadatos = ejecutar_comando(
+            self._normalizar_comando(comando_cobertura),
+            cwd=str(ruta),
+            comando_original=comando_cobertura,
+            timeout=TIMEOUT_COBERTURA_SEGUNDOS,
+        )
+
+        if proceso is None:
             return ResultadoDeHerramienta(
                 herramienta_id=self.id,
                 estado=EstadoResultado.ERROR,
-                datos={
-                    "cobertura_global": 0.0,
-                    "por_archivo": [],
-                    "estado": "no_ejecutado",
-                },
-                error="Timeout: la ejecución de cobertura excedió 180 segundos.",
+                datos=_datos_sin_cobertura(metadatos, "no_ejecutado"),
+                error=_MENSAJE_POR_CAUSA.get(
+                    metadatos.causa_no_ejecutado,
+                    "La cobertura no se ejecutó.",
+                ),
             )
-        except (OSError, subprocess.SubprocessError) as e:
-            return ResultadoDeHerramienta(
-                herramienta_id=self.id,
-                estado=EstadoResultado.ERROR,
-                datos={
-                    "cobertura_global": 0.0,
-                    "por_archivo": [],
-                    "estado": "error",
-                },
-                error=f"Error ejecutando comando de cobertura: {e}",
-            )
+
+        salida_completa = proceso.stdout + "\n" + proceso.stderr
 
         # Parsear salida
         datos = self._parsear_salida(salida_completa, ruta)
 
-        salida_normalizada = salida_completa.lower()
-        cero_tests_explicito = any(
-            marca in salida_normalizada
-            for marca in (
-                "no tests ran",
-                "collected 0 items",
-                "no tests found",
-                "no test is available",
-            )
-        )
+        causa_textual = clasificar_salida(salida_completa)
         if (
             datos.get("estado") == "no_ejecutado"
-            and cero_tests_explicito
-            and resultado_proc.returncode in {0, 5}
+            and causa_textual == SIN_PRUEBAS
+            and proceso.returncode in {0, 5}
         ):
+            # El comando corrió correctamente; simplemente no había pruebas que
+            # medir. Es un éxito con causa explícita, no un fallo (FR-107).
+            datos.update(metadatos.con_causa(SIN_PRUEBAS).como_dict())
             return ResultadoDeHerramienta(
                 herramienta_id=self.id,
                 estado=EstadoResultado.EXITO,
                 datos=datos,
             )
 
-        if resultado_proc.returncode != 0 or datos.get("estado") != "exito":
+        if proceso.returncode != 0 or datos.get("estado") != "exito":
+            # Se distingue "el comando falló" de "el comando corrió pero no se
+            # localizó ningún informe de cobertura" (FR-107): antes ambos casos
+            # colapsaban en el mismo `estado: "error"` sin causa.
+            if proceso.returncode != 0:
+                causa = causa_textual if causa_textual else ERROR_DE_EJECUCION
+            else:
+                causa = REPORTE_NO_ENCONTRADO
             return ResultadoDeHerramienta(
                 herramienta_id=self.id,
                 estado=EstadoResultado.ERROR,
-                datos={
-                    "cobertura_global": 0.0,
-                    "por_archivo": [],
-                    "estado": "error",
-                },
-                error=(
-                    "La ejecución de cobertura no produjo un resultado "
-                    f"compatible (returncode={resultado_proc.returncode})."
+                datos=_datos_sin_cobertura(metadatos.con_causa(causa), "error"),
+                error=_MENSAJE_POR_CAUSA.get(
+                    causa,
+                    (
+                        "La ejecución de cobertura no produjo un resultado "
+                        f"compatible (returncode={proceso.returncode})."
+                    ),
                 ),
             )
 
+        datos.update(metadatos.con_causa(EJECUTADO).como_dict())
         return ResultadoDeHerramienta(
             herramienta_id=self.id,
             estado=EstadoResultado.EXITO,

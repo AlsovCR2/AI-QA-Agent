@@ -9,10 +9,28 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-import pytest
 
 from qa_agent.tools.base import EstadoResultado
+from qa_agent.tools.ejecucion import (
+    COMANDO_NO_PERMITIDO,
+    RUTA_INVALIDA,
+    SIN_EJECUTAR,
+)
 from qa_agent.tools.run_tests import RunTestsHerramienta
+
+
+# Un rechazo ANTERIOR a la ejecución no puede emitir contadores de pruebas (no
+# hay ninguna que contar), pero desde T208 sí emite la causa legible por
+# máquina. Antes devolvía `{}`, que obligaba al consumidor a adivinar el motivo
+# leyendo el texto del error (FR-106).
+def _assert_rechazo_sin_ejecutar(resultado, causa_esperada):
+    assert resultado.estado in {EstadoResultado.ERROR, EstadoResultado.INVALIDO}
+    assert resultado.datos["causa_no_ejecutado"] == causa_esperada
+    assert resultado.datos["exit_code"] == SIN_EJECUTAR
+    # Ningún contador de pruebas: nada aquí puede leerse como un resultado.
+    assert "pasadas" not in resultado.datos
+    assert "total" not in resultado.datos
+
 
 
 def _crear_proyecto_tests(tmp_path: Path) -> Path:
@@ -127,8 +145,7 @@ def test_run_tests_comando_fuera_allowlist_rechazado(tmp_path):
         }
     )
 
-    assert resultado.estado in {EstadoResultado.ERROR, EstadoResultado.INVALIDO}
-    assert resultado.datos == {}
+    _assert_rechazo_sin_ejecutar(resultado, COMANDO_NO_PERMITIDO)
 
 
 def test_run_tests_ruta_fuera_allowlist_no_accede(tmp_path):
@@ -146,8 +163,7 @@ def test_run_tests_ruta_fuera_allowlist_no_accede(tmp_path):
         }
     )
 
-    assert resultado.estado in {EstadoResultado.ERROR, EstadoResultado.INVALIDO}
-    assert resultado.datos == {}
+    _assert_rechazo_sin_ejecutar(resultado, RUTA_INVALIDA)
 
 
 # -- Ampliación multi-lenguaje: dotnet test / mvn test / gradle test ----------
@@ -349,5 +365,4 @@ def test_run_tests_comando_multi_lenguaje_fuera_allowlist_rechazado(tmp_path):
         }
     )
 
-    assert resultado.estado in {EstadoResultado.ERROR, EstadoResultado.INVALIDO}
-    assert resultado.datos == {}
+    _assert_rechazo_sin_ejecutar(resultado, COMANDO_NO_PERMITIDO)

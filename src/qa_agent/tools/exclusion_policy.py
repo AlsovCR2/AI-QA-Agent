@@ -49,12 +49,13 @@ también en `docs/improvements/person-4-result.md`:
    en `NOMBRES_DIRECTORIO_EXCLUIDOS` (nunca estuvieron duplicados en otro
    archivo, están fuera del alcance de la unión de nombres de directorio).
 
-No incluido en este ruling: `explore.py` no consulta `Allowlist` por cada
-elemento descubierto (solo para la ruta raíz), así que sigue sin podar
-`dist/`, `build/` ni `.pytest_cache/` durante el recorrido. Es una
-limitación preexistente (no introducida por I07) que queda fuera de este
-alcance — corregirla requeriría cambiar el algoritmo de recorrido de
-`explore.py`, no solo centralizar constantes duplicadas.
+Cierre de la laguna declarada (T211, FR-126): la versión anterior de este
+docstring dejaba constancia de que `explore.py` no podaba `dist/`, `build/`
+ni `.pytest_cache/` durante el recorrido, porque solo consulta `Allowlist`
+para la ruta raíz. Resultó no necesitar ningún cambio de algoritmo: bastaba
+con que esos nombres estuvieran en `NOMBRES_DIRECTORIO_EXCLUIDOS`, que es lo
+que `explore`/`locate`/`search` ya consultan por cada descendiente. Ver
+RULING 3 abajo. La laguna queda cerrada.
 
 Cierre de cableado (I-3, revisión final post-integración): `agent/loop.py`
 mantenía dos copias inline del set estrecho pre-I07
@@ -88,6 +89,32 @@ NOMBRES_DIRECTORIO_EXCLUIDOS: frozenset[str] = frozenset(
         "bin",
         "obj",
         "packages",
+        # Añadidos por T211 (FR-126). RULING 3: `dist`, `build` y
+        # `.pytest_cache` ya estaban en PATRONES_EXCLUSION_ALLOWLIST, es decir,
+        # una ruta dentro de ellos YA se consideraba no autorizada — pero el
+        # recorrido de árbol no los podaba, así que `explore`/`locate`/`search`
+        # los recorrían igualmente y gastaban presupuesto listando artefactos.
+        # Esa es exactamente la laguna que el docstring declaraba pendiente.
+        # Añadirlos aquí no amplía lo prohibido: alinea el recorrido con la
+        # autorización que ya existía.
+        "dist",
+        "build",
+        ".pytest_cache",
+        # RULING 4: salidas de cobertura y cachés de herramientas de calidad.
+        # No son código fuente y su volumen (un HTML por archivo medido) domina
+        # cualquier exploración. `coverage` como nombre de directorio es una
+        # salida de herramienta, no un paquete: un paquete Python se llamaría
+        # `coverage/` solo en el propio proyecto coverage.py, que no es un
+        # objetivo realista de análisis para este agente.
+        "htmlcov",
+        "coverage",
+        ".mypy_cache",
+        ".ruff_cache",
+        ".tox",
+        # RULING 5: directorio de build de Maven y de Cargo. Se añade junto con
+        # el soporte de esos ecosistemas (T223): sin esto, analizar un proyecto
+        # Java o Rust compilado recorrería miles de clases y artefactos.
+        "target",
     }
 )
 
@@ -111,6 +138,15 @@ PATRONES_EXCLUSION_ALLOWLIST: tuple[str, ...] = (
     ".vs/",
     ".idea/",
     ".vscode/",
+    # Contrapartida en el mecanismo de autorización de los nombres añadidos por
+    # T211 (RULING 3–5): lo que no se recorre tampoco debe poder consultarse
+    # como ruta explícita autorizada.
+    "htmlcov/",
+    "coverage/",
+    ".mypy_cache/",
+    ".ruff_cache/",
+    ".tox/",
+    "target/",
 )
 
 

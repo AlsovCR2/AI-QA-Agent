@@ -37,6 +37,19 @@ _PATRONES: list[re.Pattern[str]] = [
         r"[\s\S]+?"
         r"-----END (?:RSA |EC |DSA |OPENSSH |)PRIVATE KEY-----"
     ),
+    # Claves de API de Google (Maps, Cloud, Firebase): AIza + 35 caracteres.
+    # Longitud fija: no coincide con identificadores que empiecen por "AIza".
+    re.compile(r"\bAIza[0-9A-Za-z_\-]{35}\b"),
+    # Secretos de cliente OAuth de Google (formato moderno).
+    re.compile(r"\bGOCSPX-[A-Za-z0-9_\-]{20,}\b"),
+    # Secretos de cliente de Entra ID (Azure AD). El formato documentado lleva
+    # "8Q~" como marca fija tras los primeros caracteres; anclarse a ella evita
+    # que cualquier cadena con "~" se redacte por error.
+    re.compile(r"\b[A-Za-z0-9_~.\-]{2,4}8Q~[A-Za-z0-9_~.\-]{30,}\b"),
+    # Claves de cuenta de Azure Storage embebidas en cadenas de conexión.
+    re.compile(r"\bAccountKey\s*=\s*[A-Za-z0-9+/=]{40,}", re.IGNORECASE),
+    # Firma de un SAS de Azure: el parámetro `sig=` es el secreto del token.
+    re.compile(r"\bsig=[A-Za-z0-9%+/=]{20,}", re.IGNORECASE),
     # Tokens npm/registro: npm_ + 36 alfanuméricos
     re.compile(r"\bnpm_[A-Za-z0-9]{36}\b"),
     # Credenciales embebidas en cadenas de conexión: esquema://usuario:contraseña@

@@ -14,6 +14,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+import re
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -88,42 +89,130 @@ def _tipo_cumple(valor: Any, tipo: str) -> bool:
     return True  # tipo desconocido: no imponer restricción adicional
 
 
-def _esquema_cumple(valor: Any, esquema: dict[str, Any]) -> bool:
+def _explicar(motivos: list[str] | None, mensaje: str) -> bool:
+    """Anota un motivo de rechazo (si se está recogiendo) y devuelve `False`.
+
+    Existe para que el validador pueda decir POR QUÉ rechaza sin duplicar la
+    lógica en dos funciones (T212 / FR-127): cuando `motivos` es `None` el coste
+    es una comparación, así que la ruta rápida —la que se ejecuta en cada paso
+    del bucle— no paga nada por la capacidad de explicar.
+    """
+    if motivos is not None:
+        motivos.append(mensaje)
+    return False
+
+
+def _esquema_cumple(
+    valor: Any,
+    esquema: dict[str, Any],
+    motivos: list[str] | None = None,
+    ruta: str = "$",
+) -> bool:
     """Valida una instancia contra un (sub)esquema JSON determinísticamente.
 
-    Soporta la forma usada por los contratos: `type`, `properties`,
-    `required`, `items`, `enum`, `minimum`, `maximum`. Devuelve `False` ante
-    estructuras inválidas sin lanzar excepciones (FR-005, VII, SC-010).
+    Soporta el subconjunto que usan los contratos del proyecto —`type`,
+    `properties`, `required`, `items`, `enum`, `minimum`, `maximum`— ampliado
+    en T212 con `additionalProperties`, `pattern`, `minLength`/`maxLength`,
+    `minItems`/`maxItems` y los combinadores `oneOf`/`anyOf`/`allOf`
+    (FR-127).
+
+    La ampliación es estrictamente conservadora: una palabra clave nueva solo
+    puede rechazar algo si el esquema la declara. Ningún esquema existente las
+    declara, así que el veredicto sobre los 11 esquemas actuales y los 92 casos
+    de la suite de compatibilidad de ADR-002 no cambia — lo verifica
+    `tests/contract/test_schema_validator_compat.py`.
+
+    Devuelve `False` ante estructuras inválidas sin lanzar (FR-005, VII, SC-010).
     """
     if not isinstance(esquema, dict):
-        return False
+        return _explicar(motivos, f"{ruta}: el esquema no es un objeto")
+
+    # Combinadores. Se evalúan antes que el resto porque delimitan qué
+    # subesquema aplica; sus ramas nunca contaminan la lista de motivos del
+    # nivel superior (una rama fallida es información esperada, no un error).
+    if "allOf" in esquema:
+        for i, sub in enumerate(esquema["allOf"] or []):
+            if not _esquema_cumple(valor, sub, motivos, f"{ruta}.allOf[{i}]"):
+                return False
+    if "anyOf" in esquema:
+        ramas = esquema["anyOf"] or []
+        if not any(_esquema_cumple(valor, sub, None, ruta) for sub in ramas):
+            return _explicar(motivos, f"{ruta}: no cumple ninguna rama de anyOf")
+    if "oneOf" in esquema:
+        ramas = esquema["oneOf"] or []
+        cumplidas = sum(
+            1 for sub in ramas if _esquema_cumple(valor, sub, None, ruta)
+        )
+        if cumplidas != 1:
+            return _explicar(
+                motivos,
+                f"{ruta}: oneOf exige exactamente una rama válida, cumple {cumplidas}",
+            )
 
     tipo = esquema.get("type")
     if tipo is not None and not _tipo_cumple(valor, tipo):
-        return False
+        return _explicar(
+            motivos, f"{ruta}: se esperaba tipo '{tipo}' y llegó {type(valor).__name__}"
+        )
 
     if "enum" in esquema and valor not in esquema["enum"]:
-        return False
+        return _explicar(motivos, f"{ruta}: valor fuera del enum declarado")
+
+    if isinstance(valor, str):
+        if "minLength" in esquema and len(valor) < esquema["minLength"]:
+            return _explicar(motivos, f"{ruta}: más corto que minLength")
+        if "maxLength" in esquema and len(valor) > esquema["maxLength"]:
+            return _explicar(motivos, f"{ruta}: más largo que maxLength")
+        patron = esquema.get("pattern")
+        if patron is not None:
+            try:
+                if re.search(patron, valor) is None:
+                    return _explicar(motivos, f"{ruta}: no casa con el patrón")
+            except re.error:
+                # Un patrón mal formado es un defecto del esquema, no del dato:
+                # se rechaza el esquema, nunca se acepta el dato por descarte.
+                return _explicar(motivos, f"{ruta}: patrón inválido en el esquema")
 
     if tipo == "object" and isinstance(valor, dict):
+        propiedades = esquema.get("properties", {})
         for prop in esquema.get("required", []):
             if prop not in valor:
+                return _explicar(motivos, f"{ruta}: falta la propiedad '{prop}'")
+        for prop, subesquema in propiedades.items():
+            if prop in valor and not _esquema_cumple(
+                valor[prop], subesquema, motivos, f"{ruta}.{prop}"
+            ):
                 return False
-        for prop, subesquema in esquema.get("properties", {}).items():
-            if prop in valor and not _esquema_cumple(valor[prop], subesquema):
-                return False
+        adicionales = esquema.get("additionalProperties")
+        if adicionales is False:
+            sobrantes = sorted(set(valor) - set(propiedades))
+            if sobrantes:
+                return _explicar(
+                    motivos, f"{ruta}: propiedades no declaradas: {sobrantes}"
+                )
+        elif isinstance(adicionales, dict):
+            for prop in sorted(set(valor) - set(propiedades)):
+                if not _esquema_cumple(
+                    valor[prop], adicionales, motivos, f"{ruta}.{prop}"
+                ):
+                    return False
 
     if tipo == "array" and isinstance(valor, list):
+        if "minItems" in esquema and len(valor) < esquema["minItems"]:
+            return _explicar(motivos, f"{ruta}: menos elementos que minItems")
+        if "maxItems" in esquema and len(valor) > esquema["maxItems"]:
+            return _explicar(motivos, f"{ruta}: más elementos que maxItems")
         items = esquema.get("items")
         if isinstance(items, dict):
-            if not all(_esquema_cumple(item, items) for item in valor):
-                return False
+            for i, item in enumerate(valor):
+                if not _esquema_cumple(item, items, motivos, f"{ruta}[{i}]"):
+                    return False
 
     if isinstance(valor, (int, float)) and not isinstance(valor, bool):
         if "minimum" in esquema and valor < esquema["minimum"]:
-            return False
+            return _explicar(motivos, f"{ruta}: por debajo del mínimo")
         if "maximum" in esquema and valor > esquema["maximum"]:
-            return False
+            return _explicar(motivos, f"{ruta}: por encima del máximo")
 
     return True
 
@@ -141,6 +230,25 @@ def validar_resultado_esquema(
         return _esquema_cumple(datos, esquema_salida)
     except (TypeError, ValueError, KeyError, AttributeError):
         return False
+
+
+def explicar_incumplimiento(
+    datos: Any, esquema: dict[str, Any]
+) -> list[str]:
+    """Motivos por los que `datos` no cumple `esquema`; vacío si cumple.
+
+    Complementa a `validar_resultado_esquema` (T212 / FR-127): el veredicto
+    booleano sigue siendo el camino rápido del bucle, y esta función es la que
+    convierte un rechazo en un mensaje accionable para el usuario o para el
+    diagnóstico (principio IX). Nunca lanza.
+    """
+    motivos: list[str] = []
+    try:
+        if _esquema_cumple(datos, esquema, motivos):
+            return []
+    except (TypeError, ValueError, KeyError, AttributeError) as error:
+        return [f"$: esquema o datos no procesables ({error})"]
+    return motivos
 
 
 def validar_resultado(

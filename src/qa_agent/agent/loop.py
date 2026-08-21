@@ -16,6 +16,19 @@ from pathlib import Path
 from typing import Any
 
 from qa_agent.agent.grounding import _afirmaciones_no_ancladas
+from qa_agent.agent.tracing import (
+    AUTORIZACION,
+    ERROR,
+    EVIDENCIA_SUFICIENTE,
+    PASO_EJECUTADO,
+    PENDIENTE_AUTORIZACION,
+    PRESUPUESTO_AGOTADO,
+    SIN_HERRAMIENTA,
+    SOLICITUD_INICIADA,
+    SOLICITUD_TERMINADA,
+    Trazador,
+    TrazadorNulo,
+)
 # `_es_analisis_global` y `_es_intencion_pruebas` no se usan dentro de este
 # módulo: se re-exportan a propósito desde aquí porque varios tests
 # (test_profundidad_analisis.py, test_intencion_pruebas.py,
@@ -123,6 +136,7 @@ class Agent:
         allowlist: Any | None = None,
         redactor: Redactor | None = None,
         pasos_max: int = 12,
+        trazador: Trazador | None = None,
     ) -> None:
         self._backend = backend
         self._herramientas = {h.id: h for h in herramientas}
@@ -132,6 +146,15 @@ class Agent:
         self._autorizaciones = GestorDeAutorizacion()
         self._indice_solicitud = 0
         self._pasos_max = pasos_max
+        # Observador pasivo (T214 / VIII): por defecto no acumula ni escribe
+        # nada, así que la instrumentación no altera el comportamiento ni el
+        # coste cuando nadie la pidió. El bucle nunca consulta si hay trazador.
+        self._trazador: Trazador = trazador or TrazadorNulo()
+
+    @property
+    def trazador(self) -> Trazador:
+        """Traza estructurada de la sesión (solo lectura, VIII)."""
+        return self._trazador
 
     @property
     def sesion(self) -> Sesion:
@@ -147,6 +170,37 @@ class Agent:
     ) -> None:
         # Entrada/salida ya pasan por el Redactor dentro de `Sesion` (SC-008).
         self._sesion.agregar_accion(herramienta_id, entrada, salida, estado_)
+        # Traza (T214 / FR-110). Este método es el paso obligado de toda
+        # ejecución de herramienta en ambos flujos, así que instrumentarlo aquí
+        # cubre el bucle entero sin repartir emisiones por el código.
+        estado_traza = getattr(estado_, "value", str(estado_))
+        autorizacion = ""
+        if estado_ == EstadoAccion.PENDIENTE_AUTORIZACION:
+            autorizacion = "pendiente"
+        elif isinstance(salida, dict) and salida.get("estado") == "denegada":
+            autorizacion = "denegada"
+        elif herramienta_id in self._herramientas and self._herramientas[
+            herramienta_id
+        ].requiere_autorizacion:
+            autorizacion = "concedida" if estado_ == EstadoAccion.EXITO else ""
+        self._trazador.emitir(
+            f"s{self._indice_solicitud}",
+            PASO_EJECUTADO,
+            herramienta=herramienta_id,
+            estado=estado_traza,
+            autorizacion=autorizacion,
+            duracion_ms=int(salida.get("duracion_ms", 0))
+            if isinstance(salida, dict)
+            else 0,
+            detalle={"entrada": entrada},
+        )
+        if autorizacion:
+            self._trazador.emitir(
+                f"s{self._indice_solicitud}",
+                AUTORIZACION,
+                herramienta=herramienta_id,
+                autorizacion=autorizacion,
+            )
 
     def _seleccionar_herramienta(self, solicitud_texto: str) -> str | None:
         """Selecciona el id de herramienta o `None` si ninguna es adecuada.
@@ -420,11 +474,47 @@ class Agent:
         self._sesion.registrar_solicitud(
             {"id": solicitud_id, "texto": self._redactor.redactar(texto)}
         )
+        self._trazador.emitir(
+            solicitud_id,
+            SOLICITUD_INICIADA,
+            detalle={"texto": texto, "pasos_max": self._pasos_max},
+        )
 
         if getattr(self._backend, "soporta_razonamiento", False):
-            return self._atender_react(texto, solicitud_id, autorizacion, contexto)
+            respuesta = self._atender_react(texto, solicitud_id, autorizacion, contexto)
+        else:
+            respuesta = self._atender_una_pasada(
+                texto, solicitud_id, autorizacion, contexto
+            )
 
-        return self._atender_una_pasada(texto, solicitud_id, autorizacion, contexto)
+        self._trazador.emitir(
+            solicitud_id,
+            SOLICITUD_TERMINADA,
+            estado=getattr(respuesta.confianza, "value", str(respuesta.confianza)),
+            razon_parada=self._razon_de_parada(respuesta),
+            detalle={"evidencias": len(getattr(respuesta, "acciones", []) or [])},
+        )
+        return respuesta
+
+    def _razon_de_parada(self, respuesta: RespuestaDelAgente) -> str:
+        """Clasifica por qué terminó el bucle (FR-113).
+
+        Se deriva de la respuesta ya construida, no de un estado interno nuevo:
+        la traza describe lo que ocurrió, no participa en que ocurra (I).
+        """
+        acciones = getattr(respuesta, "acciones", None) or []
+        if any(
+            getattr(a, "estado", None) == EstadoAccion.PENDIENTE_AUTORIZACION
+            for a in acciones
+        ):
+            return PENDIENTE_AUTORIZACION
+        if respuesta.confianza == Confianza.SIN_INFORMACION and not acciones:
+            return SIN_HERRAMIENTA
+        if any(getattr(a, "estado", None) == EstadoAccion.ERROR for a in acciones):
+            return ERROR
+        if self._trazador.pasos_ejecutados() >= self._pasos_max:
+            return PRESUPUESTO_AGOTADO
+        return EVIDENCIA_SUFICIENTE
 
     def _atender_una_pasada(
         self,

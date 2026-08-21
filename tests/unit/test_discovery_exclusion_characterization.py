@@ -129,17 +129,25 @@ def test_explore_excluye_ruido_ampliado_post_ruling(tmp_path):
     assert "src" in nombres
 
 
-def test_explore_sigue_mostrando_ruido_solo_patron_allowlist(tmp_path):
-    """`dist`/`build`/`.pytest_cache` nunca estuvieron en el set de nombres
-    de directorio de `explore`; fuera del alcance del ruling de unión de
-    nombres. Se mantiene igual antes y después de I07 (gap preexistente
-    documentado, no introducido por la centralización)."""
+def test_explore_ya_no_muestra_ruido_solo_patron_allowlist(tmp_path):
+    """T211 (RULING 3) cierra el gap que este test caracterizaba.
+
+    Hasta I07, `dist`/`build`/`.pytest_cache` estaban SOLO en los patrones de
+    `Allowlist`: una ruta explícita dentro de ellos ya se rechazaba como no
+    autorizada, pero `explore` los recorría igualmente porque no estaban en el
+    set de nombres de directorio. Este test documentaba esa incoherencia como
+    gap conocido. Al añadirlos a `NOMBRES_DIRECTORIO_EXCLUIDOS` el recorrido
+    queda alineado con la autorización, así que la aserción se invierte: es un
+    cambio deliberado de comportamiento, no una regresión (FR-126)."""
     proyecto = _crear_arbol_con_ruido(tmp_path)
     herramienta = ExploreHerramienta([str(proyecto)])
     resultado = herramienta.ejecutar({"ruta": str(proyecto), "profundidad_max": 2})
     nombres = {e["nombre"] for e in resultado.datos["elementos"]}
     for ruido in RUIDO_SOLO_PATRON_ALLOWLIST:
-        assert ruido in nombres
+        assert ruido not in nombres
+    # El código fuente real sigue visible: la poda no se llevó por delante
+    # nada que importe.
+    assert "src" in nombres
 
 
 # --------------------------------------------------------------------------

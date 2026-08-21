@@ -42,19 +42,28 @@ LLM_MODEL = os.environ.get("LLM_MODEL", DEFAULT_MODEL)
 LLM_API_KEY = os.environ.get("LLM_API_KEY", "").strip()
 
 
-def construir_backend(demo: bool = False) -> LLMBackend:
+def construir_backend(
+    demo: bool = False,
+    modelo: str | None = None,
+    base_url: str | None = None,
+) -> LLMBackend:
     """Selecciona el backend LLM conforme a la configuración disponible.
 
     - `demo=True` (flag `--demo`) → `FakeLLM` sin proveedor.
-    - Sin `LLM_API_KEY` → `FakeLLM` (pruebas/validación без red, SC-006).
+    - Sin `LLM_API_KEY` → `FakeLLM` (pruebas/validación sin red, SC-006).
     - Con `LLM_API_KEY` → `OpenAICompatibleBackend` (DeepSeek por defecto;
       NVIDIA/OpenAI vía `.env`).
+
+    `modelo` y `base_url` (banderas `--model`/`--base-url`, T219/FR-118) tienen
+    precedencia sobre el `.env` para poder comparar proveedores sin editar
+    configuración. La API key NUNCA se acepta por línea de comandos: quedaría
+    en el historial del shell y en la lista de procesos (principio XI).
     """
     if demo or not LLM_API_KEY:
         return FakeLLM()
     return OpenAICompatibleBackend(
-        base_url=LLM_BASE_URL,
-        model=LLM_MODEL,
+        base_url=base_url or LLM_BASE_URL,
+        model=modelo or LLM_MODEL,
         api_key=LLM_API_KEY,
     )
 

@@ -16,15 +16,22 @@ name: CI
 
 jobs:
   test:
-    name: Test (Python ${{ matrix.python-version }})
-    runs-on: ubuntu-latest
+    name: Test (${{ matrix.os }}, Python ${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        # Matrix justified by pyproject.toml's `requires-python = ">=3.11"`:
-        # the floor (3.11) and the next minor (3.12). No version is invented
-        # beyond what that floor already implies is supported.
+        # Python versions justified by pyproject.toml's
+        # `requires-python = ">=3.11"`: the floor (3.11) and the next minor
+        # (3.12). No version is invented beyond what that floor implies.
         python-version: ["3.11", "3.12"]
+        # OS matrix added by T204 (specs/002-production-readiness).
+        # Rationale: the 2026-08-21 audit found two defects that were invisible
+        # on Windows-only verification — a hardcoded `python` interpreter that
+        # does not exist on macOS, and a path separator rewrite that only
+        # resolved on Windows. Single-platform CI cannot catch that class of
+        # bug, so all three platforms run the suite (FR-104 / SC-101).
+        os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
 
@@ -56,6 +63,9 @@ jobs:
 
       - name: Ruff lint
         run: python -m ruff check .
+
+      - name: Static type check (T228, scoped — see [tool.mypy] in pyproject.toml)
+        run: python -m mypy
 
       - name: Coverage report (informational, no threshold gate)
         run: |

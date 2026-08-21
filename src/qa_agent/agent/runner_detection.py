@@ -1,55 +1,45 @@
 """Detección determinista del runner de pruebas/cobertura por tipo de proyecto.
 
-Extraído de `agent/loop.py` (I01, ADR-001) como movimiento puro: mismos
-marcadores, mismos comandos, mismo comportamiento observable. El runner se
-detecta por archivos de marcador del proyecto destino (sin LLM, VI / SC-010):
-.NET → `dotnet test`, Maven → `mvn test`, Gradle → `gradle test`, por defecto
-`pytest` (T073). Todos los comandos quedan dentro de las allowlists de
-`run_tests`/`analyze_coverage` (FR-025); este módulo solo decide CUÁL comando
-usar, nunca ejecuta nada.
+Extraído de `agent/loop.py` (I01, ADR-001) como movimiento puro. Desde T225 la
+política concreta —qué manifiestos identifican qué ecosistema y qué comando le
+corresponde— vive en `tools/runner_registry.py`, que la expresa como datos en
+vez de como una cadena de condicionales. Este módulo se conserva como la
+fachada que el bucle ya consumía, para no cambiar sus puntos de llamada
+(FR-122 / ADR-009).
+
+Todos los comandos devueltos están dentro de las allowlists de
+`run_tests`/`analyze_coverage` (FR-025 / FR-123); este módulo solo decide CUÁL
+comando usar, nunca ejecuta nada.
 """
 
 from __future__ import annotations
 
-from pathlib import Path
+from qa_agent.tools.runner_registry import (
+    ECOSISTEMA_POR_DEFECTO,
+    comando_de_cobertura,
+    comando_de_pruebas,
+    detectar_ecosistema,
+)
 
-_MARCADORES_DOTNET = ("*.csproj", "*.sln", "*.fsproj", "*.vbproj")
-_MARCADORES_MAVEN = ("pom.xml",)
-_MARCADORES_GRADLE = ("build.gradle", "settings.gradle", "build.gradle.kts")
-
-_COMANDO_PRUEBAS_PYTEST = "python -m pytest"
-_COMANDO_PRUEBAS_DOTNET = "dotnet test"
-_COMANDO_PRUEBAS_MAVEN = "mvn test"
-_COMANDO_PRUEBAS_GRADLE = "gradle test"
-
-_COMANDO_COBERTURA_PYTEST = "pytest --cov=src --cov-report=term-missing"
-_COMANDO_COBERTURA_DOTNET = 'dotnet test --collect:"XPlat Code Coverage"'
-_COMANDO_COBERTURA_MAVEN = "mvn test jacoco:report"
-
-
-def _encontrar_marcador(ruta: str, patrones: tuple[str, ...]) -> bool:
-    """True si existe algún archivo de marcador dentro de `ruta` (recursivo)."""
-    base = Path(ruta)
-    if not base.exists():
-        return False
-    return any(next(base.rglob(patron), None) is not None for patron in patrones)
+__all__ = [
+    "_detectar_comando_pruebas",
+    "_detectar_comando_cobertura",
+    "detectar_ecosistema",
+]
 
 
 def _detectar_comando_pruebas(ruta: str) -> str:
-    """Elige el comando de pruebas según el tipo de proyecto (T073)."""
-    if _encontrar_marcador(ruta, _MARCADORES_DOTNET):
-        return _COMANDO_PRUEBAS_DOTNET
-    if _encontrar_marcador(ruta, _MARCADORES_MAVEN):
-        return _COMANDO_PRUEBAS_MAVEN
-    if _encontrar_marcador(ruta, _MARCADORES_GRADLE):
-        return _COMANDO_PRUEBAS_GRADLE
-    return _COMANDO_PRUEBAS_PYTEST
+    """Comando de pruebas del ecosistema detectado (T073 / T225)."""
+    return comando_de_pruebas(ruta)
 
 
 def _detectar_comando_cobertura(ruta: str) -> str:
-    """Elige el comando de cobertura según el tipo de proyecto (T073)."""
-    if _encontrar_marcador(ruta, _MARCADORES_DOTNET):
-        return _COMANDO_COBERTURA_DOTNET
-    if _encontrar_marcador(ruta, _MARCADORES_MAVEN):
-        return _COMANDO_COBERTURA_MAVEN
-    return _COMANDO_COBERTURA_PYTEST
+    """Comando de cobertura del ecosistema detectado (T073 / T225).
+
+    El registro puede devolver `None` para un ecosistema sin comando de
+    cobertura conocido (Gradle, Rust). El bucle espera siempre una cadena, así
+    que aquí se degrada al comando por defecto: la herramienta lo rechazará o
+    reportará `reporte_no_encontrado` con causa explícita, que es preferible a
+    propagar `None` hasta un punto donde el error sería menos legible (IX).
+    """
+    return comando_de_cobertura(ruta) or ECOSISTEMA_POR_DEFECTO.cobertura or ""

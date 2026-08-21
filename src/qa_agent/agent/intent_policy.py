@@ -25,6 +25,36 @@ from __future__ import annotations
 # "qué capas hay", "cómo está organizado", etc. (T120: el detector era sensible
 # a la frase exacta — "analiza la estructura del proyecto" no disparaba el
 # enriquecimiento y el plan del flash quedaba superficial).
+# Equivalentes en inglés (T226 / FR-128). El detector era exclusivamente en
+# español, así que una pregunta en inglés no ampliaba el presupuesto de pasos ni
+# disparaba el enriquecimiento por capa: el agente respondía con un plan
+# superficial sin ninguna señal de que había entendido peor la pregunta.
+_FRASES_ANALISIS_GLOBAL_EN = (
+    "analyze the project",
+    "analyze this project",
+    "analyze the code",
+    "analyze the codebase",
+    "analyze the repository",
+    "analyze the structure",
+    "analyze the architecture",
+    "full analysis",
+    "complete analysis",
+    "explore the project",
+    "explore the structure",
+    "project structure",
+    "overall structure",
+    "explain the structure",
+    "explain the architecture",
+    "describe the project",
+    "describe the structure",
+    "how is the project organized",
+    "how is this project organized",
+    "what layers",
+    "walk me through the project",
+    "give me an overview",
+    "overview of the project",
+)
+
 _FRASES_ANALISIS_GLOBAL = (
     "analiza el proyecto",
     "analiza el código",
@@ -48,6 +78,13 @@ _FRASES_ANALISIS_GLOBAL = (
     "estructura del proyecto",
     "explica la estructura",
     "explica la estructura del proyecto",
+    # Hueco detectado por los tests parametrizados de T226: la lista tenía
+    # "analiza la arquitectura" y "describe la arquitectura", pero no la
+    # variante con "explica", que es igual de común.
+    "explica la arquitectura",
+    "explica el proyecto",
+    "explica la organización",
+    "explica la organizacion",
     "describe el proyecto",
     "describe la estructura",
     "describe la arquitectura",
@@ -77,6 +114,26 @@ _FRASES_ANALISIS_GLOBAL = (
 # garantizan la cobertura por capa y añaden `locate` de clases reales +
 # `generate_test_cases`, para que la respuesta no dependa solo de un plan
 # superficial del LLM.
+# Equivalentes en inglés de la intención de pruebas (T226 / FR-128).
+_FRASES_INTENCION_PRUEBAS_EN = (
+    "what kind of tests",
+    "what type of tests",
+    "types of tests",
+    "which tests",
+    "what tests should",
+    "what tests would",
+    "test cases for",
+    "test strategy",
+    "testing strategy",
+    "how should i test",
+    "how do i test",
+    "how to test the project",
+    "suggest tests",
+    "recommend tests",
+    "propose tests",
+    "what should i cover with tests",
+)
+
 _FRASES_INTENCION_PRUEBAS = (
     "qué tipo de pruebas",
     "que tipo de pruebas",
@@ -146,7 +203,10 @@ def _es_analisis_global(texto: str) -> bool:
     enriquece el plan por capa (FR-049).
     """
     normalizado = " ".join((texto or "").lower().split())
-    return any(frase in normalizado for frase in _FRASES_ANALISIS_GLOBAL)
+    return any(
+        frase in normalizado
+        for frase in _FRASES_ANALISIS_GLOBAL + _FRASES_ANALISIS_GLOBAL_EN
+    )
 
 
 def _es_intencion_pruebas(texto: str) -> bool:
@@ -158,7 +218,10 @@ def _es_intencion_pruebas(texto: str) -> bool:
     de un plan superficial del LLM (T121 / FR-049).
     """
     normalizado = " ".join((texto or "").lower().split())
-    return any(frase in normalizado for frase in _FRASES_INTENCION_PRUEBAS)
+    return any(
+        frase in normalizado
+        for frase in _FRASES_INTENCION_PRUEBAS + _FRASES_INTENCION_PRUEBAS_EN
+    )
 
 
 def _es_analisis_exhaustivo(texto: str) -> bool:

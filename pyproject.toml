@@ -24,6 +24,7 @@ dev = [
     "ruff>=0.16,<0.17",
     "coverage>=7.15,<8",
     "pip-audit>=2.10,<3",
+    "mypy>=1.18,<2",
 ]
 
 [project.scripts]
@@ -80,7 +81,6 @@ select = ["E4", "E7", "E9", "F"]
 "src/qa_agent/agent/router.py" = ["F401"]
 "src/qa_agent/agent/session_manager.py" = ["F401"]
 "src/qa_agent/security/authorization.py" = ["F401"]
-"src/qa_agent/tools/analyze_coverage.py" = ["F841"]
 "src/qa_agent/tools/analyze_test_results.py" = ["F401"]
 "tests/unit/test_agent_qa_integration.py" = ["F401"]
 "tests/unit/test_backup.py" = ["F401"]
@@ -88,10 +88,32 @@ select = ["E4", "E7", "E9", "F"]
 "tests/unit/test_reasoning.py" = ["F401", "F811"]
 "tests/unit/test_redactor.py" = ["F401"]
 "tests/unit/test_tools_analyze_results.py" = ["F401"]
-"tests/unit/test_tools_coverage.py" = ["F401"]
 "tests/unit/test_tools_crear_archivo.py" = ["F401"]
 "tests/unit/test_tools_explore.py" = ["F401", "F841"]
 "tests/unit/test_tools_generate_cases.py" = ["F401"]
 "tests/unit/test_tools_locate.py" = ["F401", "F841"]
-"tests/unit/test_tools_run_tests.py" = ["F401"]
 "tests/unit/test_tools_search.py" = ["F401"]
+
+[tool.mypy]
+# T228 (ADR-003 revisado). Adopción POR ETAPAS, no global: ADR-003 midió 45
+# errores de mypy sobre el código existente —varios en el `loop.py` que estaba
+# congelado— y difirió la adopción para no provocar una tormenta de ediciones.
+# Esa medición sigue siendo válida, así que aquí solo se comprueban los módulos
+# escritos con anotaciones completas desde el principio (T206/T213/T223/T217).
+# Cada módulo existente se añade a `files` cuando su dueño lo tipe, no antes.
+#
+# VERIFICADO 2026-08-21 en macOS con mypy 1.20.2: `python -m mypy` → "Success:
+# no issues found in 7 source files". Solo entonces se añadió el paso de CI
+# correspondiente (job `quality`), siguiendo la regla de no introducir un gate
+# que nadie ha visto pasar.
+python_version = "3.11"
+files = [
+    "src/qa_agent/tools/ejecucion.py",
+    "src/qa_agent/tools/runner_registry.py",
+    "src/qa_agent/tools/exclusion_policy.py",
+    "src/qa_agent/agent/tracing.py",
+    "src/qa_agent/evaluacion/",
+]
+strict = true
+warn_unused_ignores = true
+show_error_codes = true
