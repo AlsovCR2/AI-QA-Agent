@@ -101,7 +101,7 @@ Lo que se ejecutó de verdad, no lo que se supone:
 
 | Comprobación | Resultado |
 |---|---|
-| `python -m pytest -q` | 705 passed |
+| `python -m pytest -q` | 707 passed |
 | `python -m ruff check .` | All checks passed |
 | `python -m mypy` | Success: no issues found in 7 source files |
 | `python -m pip check` | No broken requirements found |
@@ -133,3 +133,25 @@ Aparte, se cerró un hueco de cobertura encontrado al revisar T215:
 ningún test. `test_razon_de_parada_presupuesto_agotado` la cubre fijando el
 borde por los dos lados (con presupuesto justo y con uno más), para que una
 implementación que devolviera esa razón siempre tampoco pasara.
+
+## Defecto encontrado probando con modelo real (2026-08-21)
+
+Ejecutando el agente contra Gemini (`gemini-3.5-flash-lite`, sin `--demo`)
+apareció un fallo en la razón de parada de FR-113 que ningún test detectaba:
+una solicitud que se completaba con éxito y confianza alta se reportaba como
+`pendiente_autorizacion`.
+
+Causa: `respuesta.acciones` es el historial visible de la sesión ENTERA, no el
+de la solicitud actual. `_razon_de_parada` clasificaba sobre ese acumulado, así
+que una acción pendiente arrastrada marcaba a todas las solicitudes
+posteriores. Se manifiesta en el flujo interactivo de la CLI, que llama a
+`atender()` dos veces sobre el mismo agente —sin decisión y luego con ella—,
+que es exactamente el camino de toda acción sensible autorizada.
+
+Ningún test lo cogía porque todos estrenaban agente por caso, y con agente
+fresco la clasificación es correcta.
+
+Arreglado marcando el corte del historial al empezar la solicitud y
+clasificando solo lo posterior. Cubierto por dos tests que fallan si se
+neutraliza el arreglo (comprobado). Verificado de nuevo contra Gemini: el
+evento de cierre pasa de `pendiente_autorizacion` a `evidencia_suficiente`.

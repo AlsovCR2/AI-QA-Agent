@@ -20,6 +20,7 @@ from qa_agent.agent.tracing import (
     AUTORIZACION,
     EVIDENCIA_SUFICIENTE,
     PASO_EJECUTADO,
+    PENDIENTE_AUTORIZACION,
     PRESUPUESTO_AGOTADO,
     RAZONES_DE_PARADA,
     SOLICITUD_INICIADA,
@@ -323,3 +324,49 @@ def test_razon_de_parada_presupuesto_agotado(tmp_path):
 
     assert justo.razon_de_parada() == PRESUPUESTO_AGOTADO
     assert holgado.razon_de_parada() == EVIDENCIA_SUFICIENTE
+
+
+def test_la_razon_de_parada_es_de_la_solicitud_no_de_la_sesion(tmp_path):
+    """FR-113: la razón describe POR QUÉ terminó ESTA solicitud.
+
+    `respuesta.acciones` es el historial acumulado de la sesión entera, así que
+    clasificar sobre él hace que una acción pendiente de una solicitud anterior
+    marque para siempre a todas las siguientes. Es justo lo que pasa en el flujo
+    interactivo de la CLI (`cli/main.py`), que llama a `atender()` dos veces
+    sobre el MISMO agente: primero sin decisión y luego con ella.
+
+    Reproducido contra Gemini el 2026-08-21: la segunda pasada creaba el archivo
+    con éxito y confianza alta, y la traza seguía diciendo
+    `pendiente_autorizacion`.
+    """
+    raiz = _proyecto(tmp_path)
+    trazador = Trazador()
+    agente = _agente(raiz, trazador)
+    pregunta = f"ejecuta las pruebas de {raiz}"
+
+    agente.atender(pregunta, None)
+    assert trazador.razon_de_parada() == PENDIENTE_AUTORIZACION
+
+    agente.atender(pregunta, autorizacion=True)
+
+    assert trazador.razon_de_parada() != PENDIENTE_AUTORIZACION, (
+        "la acción pendiente de la primera pasada no debe clasificar la segunda"
+    )
+
+
+def test_una_solicitud_limpia_tras_una_pendiente_no_hereda_su_razon(tmp_path):
+    """Forma general del mismo defecto: la clasificación es POR solicitud.
+
+    Aquí el historial de sesión ya contiene acciones reales cuando llega la
+    tercera solicitud. Si la clasificación mirase ese acumulado, la pendiente de
+    la primera seguiría decidiendo por una solicitud que no tiene nada que ver.
+    """
+    raiz = _proyecto(tmp_path)
+    trazador = Trazador()
+    agente = _agente(raiz, trazador)
+
+    agente.atender(f"ejecuta las pruebas de {raiz}", None)      # deja pendiente
+    agente.atender(f"ejecuta las pruebas de {raiz}", True)      # la resuelve
+    agente.atender(f"explora la estructura de {raiz}", None)    # ajena a todo
+
+    assert trazador.razon_de_parada() == EVIDENCIA_SUFICIENTE

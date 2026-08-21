@@ -480,6 +480,12 @@ class Agent:
             detalle={"texto": texto, "pasos_max": self._pasos_max},
         )
 
+        # `respuesta.acciones` es el historial VISIBLE de la sesión entera, no
+        # el de esta solicitud. Se marca dónde empieza la solicitud actual para
+        # poder clasificarla por lo que hizo ella y no por lo que quedó de las
+        # anteriores (ver `_razon_de_parada`).
+        corte_historial = len(self._sesion.acciones)
+
         if getattr(self._backend, "soporta_razonamiento", False):
             respuesta = self._atender_react(texto, solicitud_id, autorizacion, contexto)
         else:
@@ -491,18 +497,28 @@ class Agent:
             solicitud_id,
             SOLICITUD_TERMINADA,
             estado=getattr(respuesta.confianza, "value", str(respuesta.confianza)),
-            razon_parada=self._razon_de_parada(respuesta),
+            razon_parada=self._razon_de_parada(respuesta, corte_historial),
             detalle={"evidencias": len(getattr(respuesta, "acciones", []) or [])},
         )
         return respuesta
 
-    def _razon_de_parada(self, respuesta: RespuestaDelAgente) -> str:
-        """Clasifica por qué terminó el bucle (FR-113).
+    def _razon_de_parada(
+        self, respuesta: RespuestaDelAgente, corte_historial: int = 0
+    ) -> str:
+        """Clasifica por qué terminó ESTA solicitud (FR-113).
 
         Se deriva de la respuesta ya construida, no de un estado interno nuevo:
         la traza describe lo que ocurrió, no participa en que ocurra (I).
+
+        `corte_historial` es cuántas acciones había en la sesión ANTES de esta
+        solicitud. Clasificar sobre el historial completo hacía que una acción
+        pendiente arrastrada de una solicitud anterior marcase para siempre a
+        todas las siguientes — visible en el flujo interactivo de la CLI, que
+        llama a `atender()` dos veces sobre el mismo agente (sin decisión y
+        luego con ella): la segunda pasada creaba el archivo con éxito y la
+        traza seguía diciendo `pendiente_autorizacion`.
         """
-        acciones = getattr(respuesta, "acciones", None) or []
+        acciones = (getattr(respuesta, "acciones", None) or [])[corte_historial:]
         if any(
             getattr(a, "estado", None) == EstadoAccion.PENDIENTE_AUTORIZACION
             for a in acciones
