@@ -101,7 +101,7 @@ Lo que se ejecutó de verdad, no lo que se supone:
 
 | Comprobación | Resultado |
 |---|---|
-| `python -m pytest -q` | 704 passed |
+| `python -m pytest -q` | 705 passed |
 | `python -m ruff check .` | All checks passed |
 | `python -m mypy` | Success: no issues found in 7 source files |
 | `python -m pip check` | No broken requirements found |
@@ -116,3 +116,20 @@ expectativas deliberadamente mutadas —herramienta que el agente no usa,
 evidencia inexistente, autorización exigida donde no toca— baja las métricas
 correspondientes a 0.00 y la global a 0.875. El 1.00 de la corrida real es un
 aprobado, no un banco que aprueba cualquier cosa.
+
+## Hallazgos del primer push a CI (run 32508477617)
+
+Los 6 jobs de test pasaron en ubuntu/macos/windows × Python 3.11/3.12, y el
+paso de mypy añadido por T228 pasó en CI. Falló `pip-audit`, y el fallo era
+real: setuptools 79.0.1 —el preinstalado del runner— arrastra
+PYSEC-2026-3447, corregido en 83.0.0.
+
+Corregido subiendo el suelo de `[build-system].requires` a `setuptools>=83` y
+actualizando el setuptools del entorno antes de auditar. **No** se usó
+`--ignore-vuln`: un audit que silencia lo que encuentra no es un audit.
+
+Aparte, se cerró un hueco de cobertura encontrado al revisar T215:
+`presupuesto_agotado` era la única de las cinco razones de parada de FR-113 sin
+ningún test. `test_razon_de_parada_presupuesto_agotado` la cubre fijando el
+borde por los dos lados (con presupuesto justo y con uno más), para que una
+implementación que devolviera esa razón siempre tampoco pasara.

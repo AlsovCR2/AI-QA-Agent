@@ -20,6 +20,7 @@ from qa_agent.agent.tracing import (
     AUTORIZACION,
     EVIDENCIA_SUFICIENTE,
     PASO_EJECUTADO,
+    PRESUPUESTO_AGOTADO,
     RAZONES_DE_PARADA,
     SOLICITUD_INICIADA,
     SOLICITUD_TERMINADA,
@@ -288,3 +289,37 @@ def test_razon_de_parada_evidencia_suficiente_es_el_caso_normal(tmp_path):
     _agente(raiz, trazador).atender(f"explora la estructura de {raiz}", None)
 
     assert trazador.razon_de_parada() == EVIDENCIA_SUFICIENTE
+
+
+def test_razon_de_parada_presupuesto_agotado(tmp_path):
+    """FR-113: `presupuesto_agotado` es una de las cinco razones declaradas y
+    hasta ahora era la única sin cobertura.
+
+    Se fija el límite en 1 paso y se comprueba el borde en los dos sentidos: con
+    presupuesto justo se reporta agotado, y con uno más se reporta el caso
+    normal. Afirmar solo el primer lado dejaría pasar una implementación que
+    devolviese `presupuesto_agotado` siempre.
+    """
+    raiz = _proyecto(tmp_path)
+    pregunta = f"explora la estructura de {raiz}"
+
+    justo = Trazador()
+    Agent(
+        backend=FakeLLM(),
+        herramientas=[ExploreHerramienta([str(raiz)])],
+        allowlist=Allowlist([str(raiz)]),
+        trazador=justo,
+        pasos_max=1,
+    ).atender(pregunta, None)
+
+    holgado = Trazador()
+    Agent(
+        backend=FakeLLM(),
+        herramientas=[ExploreHerramienta([str(raiz)])],
+        allowlist=Allowlist([str(raiz)]),
+        trazador=holgado,
+        pasos_max=2,
+    ).atender(pregunta, None)
+
+    assert justo.razon_de_parada() == PRESUPUESTO_AGOTADO
+    assert holgado.razon_de_parada() == EVIDENCIA_SUFICIENTE

@@ -1,5 +1,9 @@
 [build-system]
-requires = ["setuptools>=68"]
+# Suelo subido de 68 a 83 el 2026-08-21: `pip-audit` en CI marcó
+# PYSEC-2026-3447 contra setuptools 79.0.1, corregido en 83.0.0. setuptools solo
+# se usa para construir (no es dependencia de runtime), pero construir con una
+# versión vulnerable es exactamente lo que el audit existe para impedir.
+requires = ["setuptools>=83"]
 build-backend = "setuptools.build_meta"
 
 [project]
