@@ -16,13 +16,15 @@ from qa_agent.tools.base import (
     Herramienta,
     ResultadoDeHerramienta,
 )
+from qa_agent.tools.exclusion_policy import (
+    NOMBRES_DIRECTORIO_EXCLUIDOS as DIRECTORIOS_IGNORADOS,
+)
 
 # Ruido que no aporta información de estructura: artefactos de build,
 # dependencias y control de versiones. Suelen dominar el árbol y saturan la
 # observación del LLM (UC-002). Se excluyen en cualquier nivel del árbol.
-DIRECTORIOS_IGNORADOS = frozenset(
-    {".git", ".vs", "bin", "obj", "packages", "node_modules"}
-)
+# Centralizado en `exclusion_policy.py` (I07); `DIRECTORIOS_IGNORADOS` se
+# re-exporta aquí por compatibilidad (lo reutilizan `locate.py`/`search.py`).
 
 
 class ExploreHerramienta(Herramienta):

@@ -17,7 +17,9 @@ from qa_agent.tools.base import (
     Herramienta,
     ResultadoDeHerramienta,
 )
-from qa_agent.tools.explore import DIRECTORIOS_IGNORADOS
+from qa_agent.tools.exclusion_policy import (
+    NOMBRES_DIRECTORIO_EXCLUIDOS as DIRECTORIOS_IGNORADOS,
+)
 
 
 # Mapeo de extensiones a tipos heurísticos (no exhaustivo, solo para guiar)
