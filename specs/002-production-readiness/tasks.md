@@ -155,3 +155,32 @@ Arreglado marcando el corte del historial al empezar la solicitud y
 clasificando solo lo posterior. Cubierto por dos tests que fallan si se
 neutraliza el arreglo (comprobado). Verificado de nuevo contra Gemini: el
 evento de cierre pasa de `pendiente_autorizacion` a `evidencia_suficiente`.
+
+## Fiabilidad de la edición asistida (medido 2026-08-21)
+
+Tarea: "corrige la función `mediana`" sobre un módulo real de 50 líneas, con
+Gemini 3.5 Flash Lite. Se cuenta como éxito solo si la corrección se aplica Y
+las 21 pruebas del proyecto siguen pasando.
+
+| Estado del código | Resultado |
+|---|---|
+| Reescritura de archivo completo | ~1 de 4; el resto DESTRUÍA el módulo |
+| + validación de sintaxis previa a escribir | 0 destrozos; ~1 de 4 aplicaba |
+| + `funciones` (localización por `ast`) | 4-6/10 por CLI, 5/5 por API |
+| + reutilización del plan aprobado | **20/20** |
+
+Los tres saltos vienen de defectos reales, no de reescribir el prompt:
+
+1. El planificador reventaba con cualquier parámetro de tipo lista
+   (`unhashable type: 'list'`), dejando la solicitud sin ningún paso.
+2. La CLI resolvía UNA sola ronda de autorización; con dos acciones sensibles
+   la segunda quedaba suspendida en silencio.
+3. Al autorizar se replanificaba desde cero, así que el permiso concedido para
+   una acción podía ejecutar otra distinta.
+
+**Nota de método:** las dos primeras tandas dieron 9/10 y 5/10. Los seis fallos
+eran 429 del proveedor, no del modelo: el arnés lanzaba corridas seguidas y
+agotaba la cuota por minuto. Con 45 s entre corridas, 20/20. Que esos 429 fueran
+diagnosticables se debe al arreglo de la misma sesión que dejó de tragarse los
+errores del proveedor durante la planificación; antes se habrían contado como
+fallos del modelo.
