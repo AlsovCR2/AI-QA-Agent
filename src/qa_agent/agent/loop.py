@@ -12,6 +12,8 @@ El bucle es determinista excepto las tres operaciones delegadas al `LLMBackend`
 
 from __future__ import annotations
 
+import copy
+
 from pathlib import Path
 from typing import Any
 
@@ -158,6 +160,10 @@ class Agent:
         # nada, así que la instrumentación no altera el comportamiento ni el
         # coste cuando nadie la pidió. El bucle nunca consulta si hay trazador.
         self._trazador: Trazador = trazador or TrazadorNulo()
+        #: Plan de la pasada que quedó pendiente de autorización, junto con su
+        #: texto. Se reutiliza al conceder el permiso en vez de replanificar
+        #: (ver `_atender_react`).
+        self._plan_pendiente: tuple[str, Any] | None = None
 
     @property
     def trazador(self) -> Trazador:
@@ -772,24 +778,59 @@ class Agent:
         )
         if contexto:
             intencion.contexto.update(contexto)
-        try:
-            plan = self._backend.planificar(
-                self._redactor.redactar(intencion),
-                list(self._herramientas.values()),
-                self._redactor.redactar(intencion.contexto),
-            )
-        except Exception:  # noqa: BLE001 - degradar sin romper el agente
-            plan = None
-        # Cobertura determinista del análisis global (FR-049): el plan del LLM
-        # se enriquece con pasos que recorren las capas reales del proyecto
-        # (explore por capa + leer_archivo de su código principal).
-        plan = self._enriquecer_plan_analisis_global(plan, texto)
-        plan = self._enriquecer_plan_pruebas(plan, texto)
-        # Cobertura determinista del análisis de una capa/carpeta concreta
-        # (FR-049 / T122): el plan se enriquece con `explore` de la capa real y
-        # `leer_archivo` de CADA archivo de código existente, para que el
-        # resultado no dependa del subconjunto que planifique el LLM.
-        plan = self._enriquecer_plan_analisis_capa(plan, texto)
+        # Integridad del human-in-the-loop (FR-015/046, principio V): cuando el
+        # usuario concede la autorización, se ejecuta EL PLAN QUE VIO, no uno
+        # nuevo. Replanificar aquí significaba que el permiso concedido para una
+        # acción podía acabar ejecutando otra distinta, y además hacía que el
+        # resultado dependiera de una segunda tirada del modelo: medido contra
+        # Gemini, la misma corrección pasaba de 5/5 por API a 4-6/10 por CLI
+        # solo por esta replanificación.
+        error_planificacion = ""
+        plan_aprobado = (
+            autorizacion is not None
+            and self._plan_pendiente is not None
+            and self._plan_pendiente[0] == texto
+        )
+        if plan_aprobado:
+            # Copia profunda: `EstadoDelAgente` marca los pasos del plan a
+            # medida que los consume, así que reutilizar el MISMO objeto
+            # entregaría un plan sin pasos pendientes y no se ejecutaría nada.
+            plan = copy.deepcopy(self._plan_pendiente[1])  # type: ignore[index]
+            self._plan_pendiente = None
+        else:
+            try:
+                plan = self._backend.planificar(
+                    self._redactor.redactar(intencion),
+                    list(self._herramientas.values()),
+                    self._redactor.redactar(intencion.contexto),
+                )
+            except Exception as error:  # noqa: BLE001 - degradar sin romper
+                # Degradar no es callar (IX / FR-019). Un 429 del proveedor, una
+                # clave caducada o una caída de red dejaban `plan = None` y el
+                # usuario veía "no tengo una respuesta basada en evidencia",
+                # indistinguible de "tu pregunta no aplica". Se conserva el
+                # motivo real para que la respuesta final pueda decirlo.
+                plan = None
+                error_planificacion = (
+                    f"{type(error).__name__}: {error}"
+                    if str(error)
+                    else type(error).__name__
+                )
+            # Cobertura determinista del análisis global (FR-049): el plan del
+            # LLM se enriquece con pasos que recorren las capas reales del
+            # proyecto (explore por capa + leer_archivo de su código principal).
+            plan = self._enriquecer_plan_analisis_global(plan, texto)
+            plan = self._enriquecer_plan_pruebas(plan, texto)
+            # Cobertura determinista del análisis de una capa/carpeta concreta
+            # (FR-049 / T122): el plan se enriquece con `explore` de la capa real
+            # y `leer_archivo` de CADA archivo de código existente, para que el
+            # resultado no dependa del subconjunto que planifique el LLM.
+            plan = self._enriquecer_plan_analisis_capa(plan, texto)
+
+        if autorizacion is None:
+            # Se guarda YA ENRIQUECIDO: al reutilizarlo no se vuelve a pasar por
+            # los enriquecedores, así que debe ser el plan definitivo.
+            self._plan_pendiente = (texto, copy.deepcopy(plan))
 
         estado = EstadoDelAgente(
             intencion=intencion,
@@ -889,6 +930,7 @@ class Agent:
             solicitud_id,
             observaciones,
             agotado_presupuesto=estado.excedio_pasos_max(),
+            error_planificacion=error_planificacion,
         )
 
     def _resolver_archivo_real(self, archivo_relativo: str) -> str | None:
@@ -1412,6 +1454,7 @@ class Agent:
         solicitud_id: str,
         observaciones: list[Observacion],
         agotado_presupuesto: bool = False,
+        error_planificacion: str = "",
     ) -> RespuestaDelAgente:
         """Genera la respuesta final anclada en las observaciones reales.
 
@@ -1461,6 +1504,12 @@ class Agent:
                     f"({error_respuesta}). El agente recopiló evidencia real "
                     "en sus pasos, pero no pudo redactar la respuesta; revisa "
                     "el panel Razonamiento."
+                )
+            elif error_planificacion:
+                texto_final = self._redactor.redactar(
+                    "No pude planificar la solicitud porque el proveedor LLM "
+                    f"falló ({error_planificacion}). No es que la solicitud no "
+                    "aplique: el agente no llegó a ejecutar ningún paso."
                 )
             else:
                 texto_final = (
