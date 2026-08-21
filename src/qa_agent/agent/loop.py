@@ -12,20 +12,31 @@ El bucle es determinista excepto las tres operaciones delegadas al `LLMBackend`
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 from typing import Any
 
 from qa_agent.agent.grounding import _afirmaciones_no_ancladas
+# `_es_analisis_global` y `_es_intencion_pruebas` no se usan dentro de este
+# módulo: se re-exportan a propósito desde aquí porque varios tests
+# (test_profundidad_analisis.py, test_intencion_pruebas.py,
+# test_intent_layer_policy_characterization.py) los importan como
+# `qa_agent.agent.loop._es_analisis_global` / `._es_intencion_pruebas` por
+# compatibilidad con la ubicación histórica de estos detectores (I02).
 from qa_agent.agent.intent_policy import (
     _es_analisis_exhaustivo,
-    _es_analisis_global,
-    _es_intencion_pruebas,
+    _es_analisis_global,  # noqa: F401 - re-exportado para tests, ver nota arriba
+    _es_intencion_pruebas,  # noqa: F401 - re-exportado para tests, ver nota arriba
 )
+# `_extraer_capa_solicitada` y `_resolver_capa_real` no se usan dentro de este
+# módulo: se re-exportan a propósito desde aquí porque varios tests
+# (test_profundidad_capa.py, test_intent_layer_policy_characterization.py) los
+# importan como `qa_agent.agent.loop._extraer_capa_solicitada` /
+# `._resolver_capa_real` por compatibilidad con la ubicación histórica de
+# estos detectores (I02).
 from qa_agent.agent.layer_policy import (
     _es_analisis_capa,
-    _extraer_capa_solicitada,
-    _resolver_capa_real,
+    _extraer_capa_solicitada,  # noqa: F401 - re-exportado para tests, ver nota arriba
+    _resolver_capa_real,  # noqa: F401 - re-exportado para tests, ver nota arriba
 )
 from qa_agent.agent import plan_enrichment as _plan_enrichment
 from qa_agent.agent.reasoning import (
@@ -62,6 +73,7 @@ from qa_agent.tools.base import (
     validar_resultado,
     validar_resultado_esquema,
 )
+from qa_agent.tools.exclusion_policy import es_directorio_excluido
 
 
 # Análisis global del proyecto (FR-049): presupuesto ampliado de pasos para
@@ -833,15 +845,16 @@ class Agent:
         """Primer archivo REAL con ese nombre dentro del perímetro (T123).
 
         Recorrido del árbol autorizado (FR-025) ignorando artefactos de
-        build/control de versiones y directorios ocultos (igual que
-        `explore`/`_resolver_capa_real`); coincidencia case-insensitive.
-        Determinista y sin LLM (VI / SC-010). Devuelve `None` si no existe
-        ningún archivo con ese nombre.
+        build/control de versiones y directorios ocultos, usando la misma
+        política centralizada de exclusión de directorios que `explore`,
+        `locate`, `search` y `generate_test_cases`
+        (`qa_agent.tools.exclusion_policy.NOMBRES_DIRECTORIO_EXCLUIDOS`, I07);
+        coincidencia case-insensitive. Determinista y sin LLM (VI / SC-010).
+        Devuelve `None` si no existe ningún archivo con ese nombre.
         """
         base = Path(self._ruta_base())
         if not base.is_dir():
             return None
-        ignorados = {".git", ".vs", "bin", "obj", "packages", "node_modules"}
         por_visitar = [base]
         while por_visitar:
             actual = por_visitar.pop(0)
@@ -850,7 +863,7 @@ class Agent:
             except OSError:
                 continue
             for hijo in hijos:
-                if hijo.name in ignorados or (
+                if es_directorio_excluido(hijo.name) or (
                     hijo.is_dir() and hijo.name.startswith(".")
                 ):
                     continue
@@ -863,16 +876,18 @@ class Agent:
     def _buscar_directorio_por_nombre(self, nombre: str) -> Path | None:
         """Primer directorio REAL con ese nombre dentro del perímetro (T124).
 
-        Análogo a `_buscar_archivo_por_nombre` para `explore`: recorre el árbol
-        autorizado (FR-025) ignorando artefactos de build/control de versiones
-        y directorios ocultos; coincidencia case-insensitive. Determinista y
-        sin LLM (VI / SC-010). Devuelve `None` si no existe ningún directorio
-        con ese nombre.
+        Análogo a `_buscar_archivo_por_nombre`: recorre el árbol autorizado
+        (FR-025) ignorando artefactos de build/control de versiones y
+        directorios ocultos, usando la misma política centralizada de
+        exclusión de directorios que `explore`, `locate`, `search` y
+        `generate_test_cases`
+        (`qa_agent.tools.exclusion_policy.NOMBRES_DIRECTORIO_EXCLUIDOS`, I07);
+        coincidencia case-insensitive. Determinista y sin LLM (VI / SC-010).
+        Devuelve `None` si no existe ningún directorio con ese nombre.
         """
         base = Path(self._ruta_base())
         if not base.is_dir():
             return None
-        ignorados = {".git", ".vs", "bin", "obj", "packages", "node_modules"}
         por_visitar = [base]
         while por_visitar:
             actual = por_visitar.pop(0)
@@ -881,7 +896,7 @@ class Agent:
             except OSError:
                 continue
             for hijo in hijos:
-                if hijo.name in ignorados or (
+                if es_directorio_excluido(hijo.name) or (
                     hijo.is_dir() and hijo.name.startswith(".")
                 ):
                     continue
