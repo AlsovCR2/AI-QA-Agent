@@ -16,12 +16,28 @@ import re
 from pathlib import Path
 from typing import Any
 
+from qa_agent.agent.grounding import _afirmaciones_no_ancladas
+from qa_agent.agent.intent_policy import (
+    _es_analisis_exhaustivo,
+    _es_analisis_global,
+    _es_intencion_pruebas,
+)
+from qa_agent.agent.layer_policy import (
+    _es_analisis_capa,
+    _extraer_capa_solicitada,
+    _resolver_capa_real,
+)
+from qa_agent.agent import plan_enrichment as _plan_enrichment
 from qa_agent.agent.reasoning import (
     EstadoDelAgente,
     Intencion,
     Observacion,
     PasoDePlan,
     Plan,
+)
+from qa_agent.agent.runner_detection import (
+    _detectar_comando_cobertura,
+    _detectar_comando_pruebas,
 )
 from qa_agent.agent.response import (
     Confianza,
@@ -48,149 +64,12 @@ from qa_agent.tools.base import (
 )
 
 
-# Comandos de prueba/cobertura por tipo de proyecto (T073).
-# El runner se detecta por archivos de marcador del proyecto destino (sin LLM,
-# VI / SC-010): .NET → dotnet test, Maven → mvn test, Gradle → gradle test,
-# por defecto pytest. Todos dentro de las allowlists de `run_tests`/`analyze_coverage`.
-_MARCADORES_DOTNET = ("*.csproj", "*.sln", "*.fsproj", "*.vbproj")
-_MARCADORES_MAVEN = ("pom.xml",)
-_MARCADORES_GRADLE = ("build.gradle", "settings.gradle", "build.gradle.kts")
-
-_COMANDO_PRUEBAS_PYTEST = "python -m pytest"
-_COMANDO_PRUEBAS_DOTNET = "dotnet test"
-_COMANDO_PRUEBAS_MAVEN = "mvn test"
-_COMANDO_PRUEBAS_GRADLE = "gradle test"
-
-_COMANDO_COBERTURA_PYTEST = "pytest --cov=src --cov-report=term-missing"
-_COMANDO_COBERTURA_DOTNET = 'dotnet test --collect:"XPlat Code Coverage"'
-_COMANDO_COBERTURA_MAVEN = "mvn test jacoco:report"
-
-# Análisis global del proyecto (FR-049): presupuesto ampliado de pasos y
-# frases que lo disparan. Para estas solicitudes el agente no depende solo del
-# plan del LLM: enriquece el plan de forma determinista para recorrer las
-# capas reales del proyecto (FR-024 / VI).
-# Cubre las variantes más comunes: "analiza/explica/describe la estructura",
-# "qué capas hay", "cómo está organizado", etc. (T120: el detector era sensible
-# a la frase exacta — "analiza la estructura del proyecto" no disparaba el
-# enriquecimiento y el plan del flash quedaba superficial).
+# Análisis global del proyecto (FR-049): presupuesto ampliado de pasos para
+# las intenciones de análisis exhaustivo. Las tablas de frases/regex que
+# detectan esas intenciones (análisis global, sugerencia de pruebas, capa
+# concreta) viven en `intent_policy.py` y `layer_policy.py` (I02): este módulo
+# solo orquesta el bucle e importa los detectores deterministas.
 _PRESUPUESTO_ANALISIS_GLOBAL = 18
-_FRASES_ANALISIS_GLOBAL = (
-    "analiza el proyecto",
-    "analiza el código",
-    "analiza el repositorio",
-    "analiza todo el proyecto",
-    "analiza este proyecto",
-    "analiza la estructura",
-    "analiza la estructura del proyecto",
-    "analiza la arquitectura",
-    "analiza la organización",
-    "analiza la organizacion",
-    "análisis completo",
-    "analisis completo",
-    "análisis de la estructura",
-    "analisis de la estructura",
-    "explora el proyecto",
-    "explora todo el proyecto",
-    "explora la estructura",
-    "explora la estructura del proyecto",
-    "estructura completa",
-    "estructura del proyecto",
-    "explica la estructura",
-    "explica la estructura del proyecto",
-    "describe el proyecto",
-    "describe la estructura",
-    "describe la arquitectura",
-    "qué capas hay",
-    "que capas hay",
-    "cuáles son las capas",
-    "cuales son las capas",
-    "las capas del proyecto",
-    "cómo está organizado",
-    "como esta organizado",
-    "cómo está organizado el proyecto",
-    "como esta organizado el proyecto",
-    "organización del proyecto",
-    "organizacion del proyecto",
-    "distribución por capas",
-    "distribucion por capas",
-    "revisa el proyecto",
-    "revisa todo el proyecto",
-    "dime la estructura",
-    "cuál es la estructura",
-    "cual es la estructura",
-    "arquitectura del proyecto",
-)
-
-# Intenciones de sugerencia de pruebas ("¿qué pruebas podemos aplicar?"): se
-# tratan como análisis exhaustivo (T121). Amplían el presupuesto de pasos,
-# garantizan la cobertura por capa y añaden `locate` de clases reales +
-# `generate_test_cases`, para que la respuesta no dependa solo de un plan
-# superficial del LLM.
-_FRASES_INTENCION_PRUEBAS = (
-    "qué tipo de pruebas",
-    "que tipo de pruebas",
-    "tipos de pruebas",
-    "qué pruebas podemos",
-    "que pruebas podemos",
-    "qué pruebas aplicar",
-    "que pruebas aplicar",
-    "qué pruebas recomiendas",
-    "que pruebas recomiendas",
-    "qué pruebas harías",
-    "que pruebas harías",
-    "qué pruebas hacer",
-    "que pruebas hacer",
-    "qué pruebas crear",
-    "que pruebas crear",
-    "qué pruebas sugerir",
-    "que pruebas sugerir",
-    "qué casos de prueba",
-    "que casos de prueba",
-    "casos de prueba para",
-    "casos de prueba al",
-    "cómo probar el proyecto",
-    "como probar el proyecto",
-    "cómo probar este proyecto",
-    "como probar este proyecto",
-    "cómo probar el código",
-    "como probar el codigo",
-    "estrategia de pruebas",
-    "qué cubrir con pruebas",
-    "que cubrir con pruebas",
-    "pruebas al proyecto",
-    "pruebas para el proyecto",
-    # Definición/redacción de pruebas y cobertura (T123): "procede a definir
-    # las pruebas unitarias y cobertura de la capa DAL", "define las pruebas
-    # unitarias en UnitTest.md", "el porcentaje de cobertura", etc. Sin estos
-    # términos, la intención de escritura de pruebas no disparaba el
-    # enriquecimiento determinista y el LLM planificaba rutas inventadas
-    # ("Datos"/"Negocio" en vez de la capa DAL real).
-    "pruebas unitarias",
-    "pruebas de unidad",
-    "define las pruebas",
-    "definir las pruebas",
-    "definas las pruebas",
-    "definir pruebas",
-    "redacta las pruebas",
-    "redactar las pruebas",
-    "escribe las pruebas",
-    "escribir las pruebas",
-    "documenta las pruebas",
-    "documentar las pruebas",
-    "pruebas y cobertura",
-    "porcentaje de cobertura",
-    "cobertura de pruebas",
-    "cobertura de código",
-    "cobertura de codigo",
-    "cobertura del proyecto",
-    "y cobertura",
-)
-_EXTENSIONES_CODIGO = frozenset(
-    {
-        "py", "cs", "js", "ts", "tsx", "jsx", "java", "go", "rs", "kt",
-        "swift", "rb", "php", "cpp", "c", "h", "hpp", "vue",
-    }
-)
 
 # Nota de cobertura añadida a la intención cuando un análisis exhaustivo (global
 # o de una capa/carpeta concreta) agota el presupuesto de pasos: la respuesta
@@ -202,61 +81,6 @@ _NOTAS_COBERTURA_GLOBAL = (
     "entrega TODO lo que alcanzaste a observar con su estado real; indica "
     "explícitamente qué capas o archivos quedaron sin analizar. NO sugieras al "
     "usuario volver a preguntar sin antes entregar todo lo analizado."
-)
-
-# Análisis de una capa/carpeta concreta ("explora todas las clases de la capa
-# DAL", "revisa los archivos de la carpeta BLL"): el plan del LLM suele quedarse
-# en un subconjunto de archivos (los modelos rápidos planifican por convención
-# de nombres, no por el árbol real), así que el agente enriquece el plan de
-# forma determinista con `explore` de la capa real + `leer_archivo` de los
-# archivos de código existentes hasta el presupuesto de pasos (FR-024 / VI),
-# igual que el análisis global. Verificación/regresión real: con ReservaHotel
-# el modelo siempre reportaba Bitacora/Cliente/TipoPago/Usuario y omitía
-# Conexion, Hotel, Pago, Mobiliario, ClienteTelefono, Reservacion,
-# TipoHabitacion, etc.
-# El patrón captura el RESTO tras la palabra clave ("capa/carpeta/directorio")
-# para poder saltar conectores/preposiciones (T124): "la capa de DAL",
-# "la carpeta del proyecto" → el nombre real viene después de "de/del".
-_PATRON_CAPA_O_CARPETA = re.compile(
-    r"\b(?:capa|carpeta|directorio)\b\s+(.+)$", re.IGNORECASE
-)
-# Conectores/preposiciones que no son nombres de directorio y se saltan al
-# extraer la capa solicitada.
-_CONECTORES_CAPA = frozenset(
-    {
-        "de", "del", "en", "el", "la", "los", "las", "un", "una", "y", "o",
-        "e", "u", "que", "para", "al", "con", "actual", "a",
-    }
-)
-# Palabras que indican que la solicitud pide analizar/explorar el contenido de
-# la capa (y no solo menciona la capa de paso).
-_VERBOS_ANALISIS_CAPA = (
-    "explora", "explorar", "explore", "explorando",
-    "analiza", "analizar", "analizando",
-    "revisa", "revisar", "revisando",
-    "resume", "resumir", "resumen",
-    "lista", "listar", "describe", "describir", "ver", "muestra",
-    "todas las clases", "todos los archivos",
-    "las clases de la capa", "los archivos de la capa",
-    "archivos de la carpeta", "clases en la capa", "archivos en la capa",
-    "estructura", "completa", "profundiza", "profundizar",
-    "existen", "hay", "qué hay", "que hay",
-    "dime las clases", "dame las clases",
-    # Definición/escritura de contenido de una capa (T123): "procede a definir
-    # las pruebas unitarias y cobertura que se van a realizar a la capa DAL",
-    # "definas en UnitTest.md ... de la capa de datos". Sin estos verbos, una
-    # intención de crear/editar contenido para una capa concreta no disparaba
-    # el enriquecimiento y el LLM exploraba rutas inventadas ("Datos"/"Negocio"
-    # en vez de la capa DAL real).
-    "define", "definir", "definas", "definiendo",
-    "redacta", "redactar", "redactando",
-    "escribe", "escribir", "escribiendo",
-    "documenta", "documentar", "documentando",
-    "procede", "proceder", "procediendo",
-    "realiza", "realizar", "realizando",
-    "cobertura", "porcentaje de cobertura",
-    "los casos de prueba", "casos de prueba para",
-    "se van a realizar",
 )
 
 # Herramientas que MODIFICAN el proyecto: requieren autorización y, cuando el
@@ -275,135 +99,6 @@ _HERRAMIENTAS_EVIDENCIA = (
     "analyze_test_results",
     "generate_test_cases",
 )
-
-
-def _es_analisis_global(texto: str) -> bool:
-    """True si la solicitud pide analizar/explorar TODO el proyecto.
-
-    Heurística determinista sobre el texto normalizado (sin LLM, VI / SC-010):
-    si es un análisis global, el agente amplía el presupuesto de pasos y
-    enriquece el plan por capa (FR-049).
-    """
-    normalizado = " ".join((texto or "").lower().split())
-    return any(frase in normalizado for frase in _FRASES_ANALISIS_GLOBAL)
-
-
-def _extraer_capa_solicitada(texto: str) -> str:
-    """Extrae el nombre de capa/carpeta concreto solicitado (p. ej. 'DAL' en
-    'las clases de la capa DAL' o 'BLL' en 'los archivos de la carpeta BLL').
-
-    Devuelve una cadena vacía si la solicitud no nombra una capa/carpeta
-    concreta (heurística determinista, sin LLM, VI / SC-010). El valor es el
-    token textual (en minúsculas); su existencia real se valida después con
-    `_resolver_capa_real` para no inventar rutas (FR-019).
-    """
-    if not texto:
-        return ""
-    normalizado = " ".join(texto.lower().split())
-    coincidencia = _PATRON_CAPA_O_CARPETA.search(normalizado)
-    if not coincidencia:
-        return ""
-    # Salta conectores/preposiciones y toma el primer token que parece un
-    # nombre de capa/carpeta (T124): "la capa de DAL" → "dal".
-    for token in coincidencia.group(1).split():
-        candidato = token.strip(".,;:()\"'¿?")
-        if candidato and candidato not in _CONECTORES_CAPA:
-            return candidato
-    return ""
-
-
-def _es_analisis_capa(texto: str) -> bool:
-    """True si la solicitud pide analizar/explorar UNA capa o carpeta concreta.
-
-    Heurística determinista sin LLM (VI / SC-010): amplía el presupuesto de
-    pasos y enriquece el plan con la exploración y lectura exhaustiva de esa
-    capa (FR-049), de modo que el resultado no dependa solo de un plan
-    superficial del LLM (T122 / FR-024).
-    """
-    if not _extraer_capa_solicitada(texto):
-        return False
-    normalizado = " ".join((texto or "").lower().split())
-    return any(verbo in normalizado for verbo in _VERBOS_ANALISIS_CAPA)
-
-
-def _resolver_capa_real(base: str, capa_solicitada: str) -> str | None:
-    """Nombre REAL (en disco) del directorio solicitado, o `None` si no existe.
-
-    Nunca inventa una capa (FR-019 / VI): busca coincidencia exacta o
-    case-insensitive sobre los directorios de primer nivel de `base` y
-    canoniza el nombre a como existe realmente (p. ej. 'dal' → 'DAL').
-    Admite subrutas (p. ej. 'DAL/Properties'). Ignora directorios ocultos.
-    """
-    raiz = Path(base)
-    if not raiz.is_dir():
-        return None
-    pedida = Path(capa_solicitada)
-    real = None
-    for hijo in raiz.iterdir():
-        if (
-            hijo.is_dir()
-            and not hijo.name.startswith(".")
-            and hijo.name.lower() == pedida.parts[0].lower()
-        ):
-            real = hijo.name
-            break
-    if real is None:
-        return None
-    if len(pedida.parts) <= 1:
-        return real
-    return str(Path(real, *pedida.parts[1:]))
-
-
-def _es_intencion_pruebas(texto: str) -> bool:
-    """True si la solicitud pide sugerir/decidir qué pruebas aplicar.
-
-    Heurística determinista sin LLM (VI / SC-010): dispara el presupuesto
-    ampliado y el enriquecimiento del plan (cobertura por capa + `locate` de
-    clases + `generate_test_cases`), de modo que la respuesta no dependa solo
-    de un plan superficial del LLM (T121 / FR-049).
-    """
-    normalizado = " ".join((texto or "").lower().split())
-    return any(frase in normalizado for frase in _FRASES_INTENCION_PRUEBAS)
-
-
-def _es_analisis_exhaustivo(texto: str) -> bool:
-    """True si la solicitud requiere cobertura amplia (análisis global del
-    proyecto o sugerencia de pruebas): amplía el presupuesto de pasos y
-    enriquece el plan por capa (FR-049 / SC-016)."""
-    return _es_analisis_global(texto) or _es_intencion_pruebas(texto)
-
-
-def _es_archivo_codigo(ruta_relativa: str) -> bool:
-    """True si la extensión del archivo es de código fuente."""
-    return ruta_relativa.rsplit(".", 1)[-1].lower() in _EXTENSIONES_CODIGO
-
-
-def _encontrar_marcador(ruta: str, patrones: tuple[str, ...]) -> bool:
-    """True si existe algún archivo de marcador dentro de `ruta` (recursivo)."""
-    base = Path(ruta)
-    if not base.exists():
-        return False
-    return any(next(base.rglob(patron), None) is not None for patron in patrones)
-
-
-def _detectar_comando_pruebas(ruta: str) -> str:
-    """Elige el comando de pruebas según el tipo de proyecto (T073)."""
-    if _encontrar_marcador(ruta, _MARCADORES_DOTNET):
-        return _COMANDO_PRUEBAS_DOTNET
-    if _encontrar_marcador(ruta, _MARCADORES_MAVEN):
-        return _COMANDO_PRUEBAS_MAVEN
-    if _encontrar_marcador(ruta, _MARCADORES_GRADLE):
-        return _COMANDO_PRUEBAS_GRADLE
-    return _COMANDO_PRUEBAS_PYTEST
-
-
-def _detectar_comando_cobertura(ruta: str) -> str:
-    """Elige el comando de cobertura según el tipo de proyecto (T073)."""
-    if _encontrar_marcador(ruta, _MARCADORES_DOTNET):
-        return _COMANDO_COBERTURA_DOTNET
-    if _encontrar_marcador(ruta, _MARCADORES_MAVEN):
-        return _COMANDO_COBERTURA_MAVEN
-    return _COMANDO_COBERTURA_PYTEST
 
 
 class Agent:
@@ -491,282 +186,60 @@ class Agent:
         exhaustivo (análisis global, sugerencia de pruebas o análisis de una
         capa/carpeta concreta): el plan enriquecido por capa necesita más pasos
         que el mínimo."""
-        if _es_analisis_exhaustivo(texto) or _es_analisis_capa(texto):
-            return max(self._pasos_max, _PRESUPUESTO_ANALISIS_GLOBAL)
-        return self._pasos_max
+        return _plan_enrichment.presupuesto_pasos(
+            texto, self._pasos_max, _PRESUPUESTO_ANALISIS_GLOBAL
+        )
 
     def _enriquecer_plan_analisis_global(
         self, plan: Plan | None, texto: str
     ) -> Plan | None:
-        """Añade pasos deterministas para garantizar cobertura por capa.
-
-        Para una intención de análisis global, detecta con `explore` las capas
-        (directorios) de primer nivel REALES de la raíz y añade al plan: un
-        `explore` por capa (el listado de todo el árbol se trunca en el
-        contexto del LLM) y una lectura (`leer_archivo`) de los archivos de
-        código principales de cada capa. El LLM planifica, pero la cobertura
-        mínima la garantiza el agente de forma determinista (FR-024 / VI).
-        """
-        if plan is None or not _es_analisis_exhaustivo(texto):
-            return plan
-        explore = self._herramientas.get("explore")
-        leer = self._herramientas.get("leer_archivo")
-        if explore is None or leer is None:
-            return plan
-
-        try:
-            resultado_raiz = explore.ejecutar(
-                {"ruta": self._ruta_base(), "profundidad_max": 1}
-            )
-        except Exception:  # noqa: BLE001 - sin enriquecer ante errores
-            return plan
-        if resultado_raiz.estado != EstadoResultado.EXITO:
-            return plan
-        capas = sorted(
-            {
-                e.get("ruta_relativa", "")
-                for e in (resultado_raiz.datos.get("elementos") or [])
-                if e.get("tipo") == "directorio" and e.get("ruta_relativa")
-            }
+        """Añade pasos deterministas para garantizar cobertura por capa
+        (delegado a `plan_enrichment.enriquecer_plan_analisis_global`)."""
+        return _plan_enrichment.enriquecer_plan_analisis_global(
+            plan, texto, self._herramientas, self._ruta_base()
         )
-        # Capas de primer nivel (ignora directorios ocultos), acotadas para no
-        # desbordar el presupuesto de pasos del análisis.
-        capas = [c for c in capas if not c.startswith(".")][:4]
-        if not capas:
-            return plan
-
-        pasos_extra: list[PasoDePlan] = []
-        orden = max((p.orden for p in plan.pasos), default=len(plan.pasos))
-        for capa in capas:
-            if not self._plan_ya_explora_capa(plan, capa):
-                orden += 1
-                pasos_extra.append(
-                    PasoDePlan(
-                        orden=orden,
-                        razon=(
-                            f"explorar la capa real '{capa}' detectada en la "
-                            "raíz"
-                        ),
-                        herramienta="explore",
-                        parametros={
-                            "ruta": str(Path(self._ruta_base()) / capa),
-                            "profundidad_max": 3,
-                        },
-                        criterio_salida="estructura completa de la capa",
-                    )
-                )
-            for archivo in self._archivos_codigo_de_capa(explore, capa):
-                if self._plan_ya_lee_archivo(plan, archivo):
-                    continue
-                orden += 1
-                pasos_extra.append(
-                    PasoDePlan(
-                        orden=orden,
-                        razon=(
-                            f"leer el código real de '{archivo}' de la capa "
-                            f"'{capa}'"
-                        ),
-                        herramienta="leer_archivo",
-                        parametros={
-                            "ruta": self._ruta_base(),
-                            "archivo_relativo": archivo,
-                        },
-                        criterio_salida="contenido real del archivo",
-                    )
-                )
-        if not pasos_extra:
-            return plan
-        plan.pasos.extend(pasos_extra)
-        plan.pendientes.extend(pasos_extra)
-        return plan
 
     def _enriquecer_plan_pruebas(
         self, plan: Plan | None, texto: str
     ) -> Plan | None:
-        """Añade pasos deterministas para una intención de sugerencia de
-        pruebas ("¿qué pruebas podemos aplicar?"): localiza las clases reales
-        (`locate`) y genera casos de prueba sugeridos (`generate_test_cases`).
-
-        La cobertura por capa ya la garantiza `_enriquecer_plan_analisis_global`
-        (se invoca antes y dispara también para estas intenciones). Solo se
-        añaden pasos de herramientas presentes en el catálogo y si el plan del
-        LLM no los prevé ya (FR-024 / VI).
-        """
-        if plan is None or not _es_intencion_pruebas(texto):
-            return plan
-        pasos_extra: list[PasoDePlan] = []
-        orden = max((p.orden for p in plan.pasos), default=len(plan.pasos))
-
-        locate = self._herramientas.get("locate")
-        if locate is not None and not any(
-            p.herramienta == "locate" for p in plan.pasos
-        ):
-            orden += 1
-            pasos_extra.append(
-                PasoDePlan(
-                    orden=orden,
-                    razon=(
-                        "localizar las clases reales del proyecto (evidencia "
-                        "de qué unidades cubrir con pruebas)"
-                    ),
-                    herramienta="locate",
-                    parametros={
-                        "ruta": self._ruta_base(),
-                        "patron": r"\bclass\s+\w+",
-                        "tipo": "clase",
-                    },
-                    criterio_salida="clases reales localizadas",
-                )
-            )
-
-        generar = self._herramientas.get("generate_test_cases")
-        if generar is not None and not any(
-            p.herramienta == "generate_test_cases" for p in plan.pasos
-        ):
-            objetivo, cripticidad = extraer_objetivo_cripticidad(texto)
-            orden += 1
-            pasos_extra.append(
-                PasoDePlan(
-                    orden=orden,
-                    razon="generar casos de prueba sugeridos para la solicitud",
-                    herramienta="generate_test_cases",
-                    parametros={
-                        "ruta": self._ruta_base(),
-                        "objetivo": objetivo,
-                        "cripticidad": cripticidad,
-                    },
-                    criterio_salida="casos propuestos basados en código real",
-                )
-            )
-        if not pasos_extra:
-            return plan
-        plan.pasos.extend(pasos_extra)
-        plan.pendientes.extend(pasos_extra)
-        return plan
+        """Añade pasos deterministas de sugerencia de pruebas (delegado a
+        `plan_enrichment.enriquecer_plan_pruebas`)."""
+        return _plan_enrichment.enriquecer_plan_pruebas(
+            plan, texto, self._herramientas, self._ruta_base()
+        )
 
     def _enriquecer_plan_analisis_capa(
         self, plan: Plan | None, texto: str
     ) -> Plan | None:
-        """Añade pasos deterministas para analizar UNA capa/carpeta concreta.
-
-        Para intenciones como "explora todas las clases de la capa DAL", el
-        plan del LLM suele quedarse en un subconjunto de archivos (los modelos
-        rápidos planifican por convención de nombres, no por el árbol real).
-        Se enriquece de forma determinista: `explore` de la capa real + una
-        `leer_archivo` por cada archivo de código existente hasta el
-        presupuesto de pasos (SC-016), de modo que la cobertura de la capa no
-        dependa del plan del LLM (FR-024 / VI).
-        Solo actúa si la capa existe realmente (FR-019): nunca inventa rutas.
-        """
-        if plan is None or not _es_analisis_capa(texto):
-            return plan
-        explore = self._herramientas.get("explore")
-        leer = self._herramientas.get("leer_archivo")
-        if explore is None or leer is None:
-            return plan
-        capa = _resolver_capa_real(
-            self._ruta_base(), _extraer_capa_solicitada(texto)
+        """Añade pasos deterministas para analizar UNA capa/carpeta concreta
+        (delegado a `plan_enrichment.enriquecer_plan_analisis_capa`)."""
+        return _plan_enrichment.enriquecer_plan_analisis_capa(
+            plan,
+            texto,
+            self._herramientas,
+            self._ruta_base(),
+            self._pasos_max,
+            _PRESUPUESTO_ANALISIS_GLOBAL,
         )
-        if not capa:
-            return plan
-
-        pasos_extra: list[PasoDePlan] = []
-        orden = max((p.orden for p in plan.pasos), default=len(plan.pasos))
-        ya_explora = self._plan_ya_explora_capa(plan, capa)
-        if not ya_explora:
-            orden += 1
-            pasos_extra.append(
-                PasoDePlan(
-                    orden=orden,
-                    razon=(
-                        f"explorar la capa real '{capa}' solicitada por el "
-                        "usuario"
-                    ),
-                    herramienta="explore",
-                    parametros={
-                        "ruta": str(Path(self._ruta_base()) / capa),
-                        "profundidad_max": 3,
-                    },
-                    criterio_salida="estructura completa de la capa",
-                )
-            )
-        # Límite adaptativo (SC-016): lee los archivos de la capa que quepan en
-        # el presupuesto restante del bucle, sin excederlo. Con el tope fijo
-        # (p. ej. 12) la capa DAL real de ReservaHotel quedaba incompleta
-        # (TipoPagoDAL.cs y UsuarioDAL.cs nunca se leían).
-        presupuesto = self._presupuesto_pasos(texto)
-        max_lecturas = max(
-            0, presupuesto - len(plan.pasos) - (1 if not ya_explora else 0)
-        )
-        for archivo in self._archivos_codigo_de_capa(
-            explore, capa, max_archivos=max_lecturas
-        ):
-            if self._plan_ya_lee_archivo(plan, archivo):
-                continue
-            orden += 1
-            pasos_extra.append(
-                PasoDePlan(
-                    orden=orden,
-                    razon=(
-                        f"leer el código real de '{archivo}' de la capa "
-                        f"'{capa}'"
-                    ),
-                    herramienta="leer_archivo",
-                    parametros={
-                        "ruta": self._ruta_base(),
-                        "archivo_relativo": archivo,
-                    },
-                    criterio_salida="contenido real del archivo",
-                )
-            )
-        if not pasos_extra:
-            return plan
-        plan.pasos.extend(pasos_extra)
-        plan.pendientes.extend(pasos_extra)
-        return plan
 
     def _archivos_codigo_de_capa(
         self, explore: Herramienta, capa: str, max_archivos: int = 2
     ) -> list[str]:
-        """Archivos de código REALES de la capa, relativos a la raíz.
-
-        Descubrimiento determinista con `explore` (FR-024): devuelve los
-        archivos que existen, nunca inventados (FR-019).
-        """
-        try:
-            resultado = explore.ejecutar(
-                {
-                    "ruta": str(Path(self._ruta_base()) / capa),
-                    "profundidad_max": 3,
-                }
-            )
-        except Exception:  # noqa: BLE001
-            return []
-        if resultado.estado != EstadoResultado.EXITO:
-            return []
-        archivos = sorted(
-            str(Path(capa) / e["ruta_relativa"]).replace("\\", "/")
-            for e in (resultado.datos.get("elementos") or [])
-            if e.get("tipo") == "archivo"
-            and _es_archivo_codigo(e.get("ruta_relativa", ""))
+        """Archivos de código REALES de la capa (delegado a
+        `plan_enrichment.archivos_codigo_de_capa`)."""
+        return _plan_enrichment.archivos_codigo_de_capa(
+            explore, self._ruta_base(), capa, max_archivos=max_archivos
         )
-        return archivos[:max_archivos]
 
     def _plan_ya_explora_capa(self, plan: Plan, capa: str) -> bool:
-        """True si el plan ya explora esa capa (misma ruta de raíz)."""
-        raiz = str(Path(self._ruta_base()) / capa)
-        return any(
-            p.herramienta == "explore" and p.parametros.get("ruta") == raiz
-            for p in plan.pasos
-        )
+        """True si el plan ya explora esa capa (delegado a
+        `plan_enrichment.plan_ya_explora_capa`)."""
+        return _plan_enrichment.plan_ya_explora_capa(plan, capa, self._ruta_base())
 
     def _plan_ya_lee_archivo(self, plan: Plan, archivo: str) -> bool:
-        """True si el plan ya lee ese archivo (mismo `archivo_relativo`)."""
-        return any(
-            p.herramienta == "leer_archivo"
-            and p.parametros.get("archivo_relativo") == archivo
-            for p in plan.pasos
-        )
+        """True si el plan ya lee ese archivo (delegado a
+        `plan_enrichment.plan_ya_lee_archivo`)."""
+        return _plan_enrichment.plan_ya_lee_archivo(plan, archivo)
 
     def _parametros_para(
         self, herramienta: Herramienta, solicitud_texto: str
@@ -1870,7 +1343,7 @@ class Agent:
         # puede ser alta.
         if (
             confianza == Confianza.ALTA
-            and self._afirmaciones_no_ancladas(texto_final, observaciones)
+            and _afirmaciones_no_ancladas(texto_final, observaciones)
         ):
             confianza = Confianza.LIMITADA
 
@@ -1883,65 +1356,3 @@ class Agent:
             recomendaciones=self._recomendaciones_redactadas(respuesta_generada),
             razonamiento=list(observaciones),
         )
-
-    def _afirmaciones_no_ancladas(
-        self, texto: str, observaciones: list[Observacion]
-    ) -> bool:
-        """True si el texto afirma tokens sustantivos ausentes de la evidencia.
-
-        Determinista (SC-010): extrae números y palabras con mayúscula inicial
-        del texto de la respuesta y comprueba que aparezcan en los datos de
-        las observaciones reales. Si alguno no aparece, la afirmación no está
-        anclada (SC-017 / FR-019) y la confianza no puede ser alta.
-        """
-        import re
-
-        if not observaciones:
-            return bool(re.search(r"\b[A-ZÁ-Ú][a-zá-ú]+\b|\d+", texto))
-        evidencia = "\n".join(
-            str(getattr(o.resultado, "datos", o.resultado))
-            for o in observaciones
-            if getattr(getattr(o, "resultado", None), "estado", None)
-            == EstadoResultado.EXITO
-        )
-        # Tokens sustantivos de la respuesta: palabras individuales con
-        # mayúscula inicial y números. Se excluyen palabras comunes del
-        # castellano (verbos en 1ª persona, conectores) que no son
-        # afirmaciones de datos, y las palabras al INICIO de frase (no son
-        # afirmaciones: SC-017 exige anclar afirmaciones, no el texto).
-        palabras_comunes = {
-            "Encontré", "Encontre", "Observé", "Observe", "Analicé", "Analice",
-            "El", "La", "Los", "Las", "Un", "Una", "Y", "Pero", "Con", "En",
-            "De", "Que", "No", "Si", "Más", "Mas", "Sin", "Por", "Para",
-        }
-        for match in re.finditer(
-            r"\b([A-ZÁ-Ú][a-zá-ú]+)\b|\b(\d+(?:\.\d+)?)\b", texto
-        ):
-            token = match.group(1) or match.group(2)
-            if token in palabras_comunes:
-                continue
-            es_numero = match.group(2) is not None
-            if es_numero:
-                if token not in evidencia:
-                    return True
-                continue
-            if self._al_inicio_de_frase(texto, match.start()):
-                continue
-            if token not in evidencia:
-                return True
-        return False
-
-    @staticmethod
-    def _al_inicio_de_frase(texto: str, pos: int) -> bool:
-        """True si `pos` apunta al inicio de una oración (no es afirmación).
-
-        Determinista: el token está al inicio de frase si es el primer carácter
-        del texto o el último carácter no espacial previo es un signo de
-        puntuación que cierra una oración.
-        """
-        i = pos - 1
-        while i >= 0 and texto[i].isspace():
-            i -= 1
-        if i < 0:
-            return True
-        return texto[i] in ".!?;:"
