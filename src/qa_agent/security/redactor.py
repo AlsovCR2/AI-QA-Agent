@@ -22,6 +22,11 @@ _PATRONES: list[re.Pattern[str]] = [
     re.compile(r"\bapi[_-]?key\s*=\s*['\"]?[^\s'\"&]+['\"]?", re.IGNORECASE),
     # Claves tipo ASS de Anthropic y genéricas "ass?:[a-z0-9]{8,}"
     re.compile(r"\bass?:[a-z0-9]{8,}\b", re.IGNORECASE),
+    # Tokens de GitHub: ghp_/gho_/ghs_ (clásicos) y github_pat_ (fine-grained)
+    re.compile(r"\b(?:ghp|gho|ghs)_[A-Za-z0-9]{36,}\b"),
+    re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}\b"),
+    # Claves de acceso AWS: AKIA + 16 alfanuméricos en mayúscula
+    re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
 ]
 
 

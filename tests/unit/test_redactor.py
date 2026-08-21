@@ -107,6 +107,66 @@ def test_redacta_en_tuple_manteniendo_tipo():
     assert salida == ("***", "limpio")
 
 
+# -- I08: cobertura ampliada de secretos (grupo A: GitHub / AWS) -----------
+
+
+def test_redacta_token_github_ghp():
+    redactor = Redactor()
+    secreto = "ghp_" + "a" * 36
+    assert redactor.redactar(f"usa {secreto} en el header") == "usa *** en el header"
+
+
+def test_redacta_token_github_gho():
+    redactor = Redactor()
+    secreto = "gho_" + "B1c2D3e4F5g6H7i8J9k0" + "l" * 16
+    assert secreto not in redactor.redactar(f"token: {secreto}")
+
+
+def test_redacta_token_github_ghs():
+    redactor = Redactor()
+    secreto = "ghs_" + "0" * 36
+    assert secreto not in redactor.redactar(f"token: {secreto}")
+
+
+def test_redacta_token_github_pat_fine_grained():
+    redactor = Redactor()
+    secreto = "github_pat_" + "a1B2c3" * 5
+    assert secreto not in redactor.redactar(f"token: {secreto}")
+
+
+def test_no_redacta_hash_git_similar_a_token_github():
+    """Un hash de commit git (hex de 40 chars) no empieza con ghp_/gho_/ghs_/github_pat_."""
+    redactor = Redactor()
+    texto = "commit a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"
+    assert redactor.redactar(texto) == texto
+
+
+def test_no_redacta_prefijo_github_sin_longitud_suficiente():
+    """'ghp_' mencionado en prosa sin los 36+ caracteres no es un token real."""
+    redactor = Redactor()
+    texto = "los tokens con prefijo ghp_ identifican credenciales clásicas"
+    assert redactor.redactar(texto) == texto
+
+
+def test_redacta_clave_acceso_aws():
+    redactor = Redactor()
+    secreto = "AKIAIOSFODNN7EXAMPLE"
+    assert redactor.redactar(f"clave: {secreto}") == "clave: ***"
+
+
+def test_no_redacta_id_similar_a_clave_aws():
+    """Un identificador de 20 chars mayúsculas que no empieza con AKIA no es una clave AWS."""
+    redactor = Redactor()
+    texto = "referencia: ORDR20230101ABCDEFGH"
+    assert redactor.redactar(texto) == texto
+
+
+def test_no_redacta_uuid_como_secreto():
+    redactor = Redactor()
+    texto = "id: 550e8400-e29b-41d4-a716-446655440000"
+    assert redactor.redactar(texto) == texto
+
+
 # -- SC-008: secretos ausentes en respuesta, historial y logs --------------
 
 
