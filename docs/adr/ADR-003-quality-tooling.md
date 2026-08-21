@@ -128,7 +128,7 @@ apply there. It did affect one config choice (see Coverage below).
   item cannot fix, or (b) require a code-behavior-adjacent cleanup pass that
   is out of scope for "wire in CI." This is recorded as a **future,
   separately-scoped item**: pick one tool (mypy is the more common default
-  for this kind of codebase and integrates directly via `pyproject.toml`), 
+  for this kind of codebase and integrates directly via `pyproject.toml`),
   fix the `Allowlist`/`Sequence` variance issue first since it recurs across
   5 files and is genuinely one root cause, then let `agent/loop.py`'s owner
   add the `Optional` guards it needs during a wave where that file is not
