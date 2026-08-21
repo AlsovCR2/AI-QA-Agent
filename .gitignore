@@ -5,3 +5,7 @@ dist/
 .pytest_cache/
 .venv/
 *.egg-info/
+.coverage
+.coverage.*
+htmlcov/
+.ruff_cache/
