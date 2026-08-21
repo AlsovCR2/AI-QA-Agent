@@ -49,11 +49,14 @@ class EditarArchivoHerramienta(Herramienta):
             "funciones": {
                 "type": "array",
                 "description": (
-                    "LA FORMA MÁS FIABLE de cambiar una función de un archivo "
-                    "Python. Indica el NOMBRE de la función y su código nuevo "
-                    "COMPLETO; la herramienta la localiza con el parser de "
-                    "Python y la sustituye. No hay que citar el código viejo ni "
-                    "reproducir el resto del archivo."
+                    "LA FORMA MÁS FIABLE de cambiar una función Python: objetos "
+                    "{nombre, codigo} con el nombre de la función y su código "
+                    "nuevo completo. La localiza el parser; no cites el código "
+                    "viejo ni reproduzcas el resto del archivo. OBLIGATORIO "
+                    "conservar de la versión actual: mismos nombres de "
+                    "parámetros, docstring, anotaciones de tipo y llamadas a "
+                    "los ayudantes del módulo (validadores). Corrige SOLO lo "
+                    "pedido: se rechaza la edición que degrade algo de eso."
                 ),
                 "items": {
                     "type": "object",
@@ -66,7 +69,13 @@ class EditarArchivoHerramienta(Herramienta):
                             "type": "string",
                             "description": (
                                 "Definición completa de la función nueva, "
-                                "empezando por 'def ' y con su indentación."
+                                "empezando por 'def '. OBLIGATORIO conservar de "
+                                "la versión actual: los MISMOS nombres de "
+                                "parámetros, el docstring, las anotaciones de "
+                                "tipo y las llamadas a funciones auxiliares del "
+                                "módulo (validadores, etc.). Corrige SOLO lo "
+                                "pedido; la edición se rechaza si degrada algo "
+                                "de eso."
                             ),
                         },
                     },

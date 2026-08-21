@@ -908,6 +908,9 @@ class Agent:
                     if not plan.pendientes:
                         break
                     continue
+                observacion = self._reintentar_escritura_rechazada(
+                    estado, siguiente, autorizacion, observacion
+                )
                 observaciones.append(observacion)
                 estado.registrar_observacion(observacion)
                 if observacion.paso is not None:
@@ -1447,6 +1450,78 @@ class Agent:
             resultado=resultado,
             evaluacion=f"ejecutado '{herramienta.id}' con éxito",
         )
+
+    #: Reintentos de una escritura rechazada por contenido inválido. Dos basta:
+    #: si con el motivo delante el modelo no corrige a la segunda, insistir solo
+    #: gasta cuota y el fallo ya se reporta con honestidad.
+    _MAX_REINTENTOS_ESCRITURA = 2
+
+    def _reintentar_escritura_rechazada(
+        self,
+        estado: Any,
+        siguiente: dict[str, Any],
+        autorizacion: bool | None,
+        observacion: Observacion,
+    ) -> Observacion:
+        """Reintenta una escritura rechazada, pasándole el motivo al modelo.
+
+        `crear_archivo`/`editar_archivo` rechazan contenido que no compila o que
+        degrada la función que sustituyen, y el motivo que devuelven es
+        accionable ("se perdieron anotaciones de tipo en: datos, return"). Sin
+        reintento ese motivo moría en la traza: el paso se daba por fallido y el
+        bucle seguía, así que el modelo se enteraba de la regla cuando ya no
+        podía usarla.
+
+        Solo se reintenta el rechazo por CONTENIDO (`INVALIDO`). Un `ERROR` —
+        ruta fuera del perímetro, disco, permiso— no se arregla reformulando, y
+        reintentarlo sería insistir contra una frontera de seguridad.
+        """
+        herramienta = (siguiente or {}).get("herramienta")
+        if herramienta not in _HERRAMIENTAS_ESCRITURA:
+            return observacion
+
+        for _ in range(self._MAX_REINTENTOS_ESCRITURA):
+            resultado = getattr(observacion, "resultado", None)
+            if getattr(resultado, "estado", None) != EstadoResultado.INVALIDO:
+                return observacion
+            motivo = (getattr(resultado, "error", "") or "").strip()
+            if not motivo:
+                return observacion
+
+            estado.registrar_observacion(observacion)
+            try:
+                corregido = self._backend.razonar(
+                    self._redactor.redactar(estado),
+                    self._redactor.redactar(
+                        [
+                            {
+                                "paso_rechazado": siguiente,
+                                "motivo_del_rechazo": motivo,
+                                "instruccion": (
+                                    "Vuelve a proponer el MISMO paso corrigiendo "
+                                    "exactamente lo que indica el motivo. No "
+                                    "cambies de herramienta ni de archivo."
+                                ),
+                            }
+                        ]
+                    ),
+                )
+            except Exception:  # noqa: BLE001 - un fallo del proveedor no reintenta
+                return observacion
+
+            if (
+                not isinstance(corregido, dict)
+                or corregido.get("herramienta") != herramienta
+            ):
+                return observacion
+
+            nueva = self._ejecutar_siguiente_paso(estado, corregido, autorizacion)
+            if nueva is None:
+                return observacion
+            observacion = nueva
+            siguiente = corregido
+
+        return observacion
 
     def _respuesta_react(
         self,

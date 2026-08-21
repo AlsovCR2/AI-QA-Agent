@@ -119,13 +119,21 @@ class OpenAICompatibleBackend(LLMBackend):
     def _describir_herramienta(h: Any) -> str:
         """Describe una herramienta con su esquema de entrada (parámetros)."""
         propiedades = (h.esquema_entrada or {}).get("properties", {})
-        if propiedades:
-            params = ", ".join(
-                f"{nombre}={prop.get('type', '?')}"
-                for nombre, prop in propiedades.items()
-            )
-            return f"- {h.id}: {h.descripcion}. Parámetros: {params or 'ninguno'}"
-        return f"- {h.id}: {h.descripcion}."
+        if not propiedades:
+            return f"- {h.id}: {h.descripcion}."
+        # Se incluye la `description` de cada parámetro, no solo su tipo. Antes
+        # solo viajaba `nombre=tipo`, así que toda la guía escrita en el esquema
+        # —qué parámetro preferir, qué debe conservar una edición— no llegaba
+        # nunca al modelo: se enteraba de las reglas al violarlas.
+        partes = []
+        for nombre, prop in propiedades.items():
+            texto = f"{nombre}={prop.get('type', '?')}"
+            detalle = (prop.get("description") or "").strip()
+            if detalle:
+                texto += f" ({OpenAICompatibleBackend._acotar(detalle, 520)})"
+            partes.append(texto)
+        params = "; ".join(partes)
+        return f"- {h.id}: {h.descripcion}. Parámetros: {params or 'ninguno'}"
 
     @staticmethod
     def _resumen_nombres(resultado: Any) -> str:

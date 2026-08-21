@@ -87,6 +87,96 @@ def _mensaje_python(error: SyntaxError) -> str:
     return " ".join(partes) + ". No se escribió nada."
 
 
+def _firma(definicion) -> list[str]:
+    """Nombres de parámetros en orden, incluidos `*args` y `**kwargs`."""
+    args = definicion.args
+    nombres = [a.arg for a in (*args.posonlyargs, *args.args)]
+    if args.vararg:
+        nombres.append("*" + args.vararg.arg)
+    nombres += [a.arg for a in args.kwonlyargs]
+    if args.kwarg:
+        nombres.append("**" + args.kwarg.arg)
+    return nombres
+
+
+def _anotados(definicion) -> set[str]:
+    """Parámetros que llevan anotación de tipo, más 'return' si la hay."""
+    import ast
+
+    args = definicion.args
+    todos = [
+        *args.posonlyargs,
+        *args.args,
+        *args.kwonlyargs,
+        *(x for x in (args.vararg, args.kwarg) if x is not None),
+    ]
+    anotados = {a.arg for a in todos if a.annotation is not None}
+    if definicion.returns is not None:
+        anotados.add("return")
+    _ = ast
+    return anotados
+
+
+def _llamadas(nodo) -> set[str]:
+    """Nombres invocados dentro del cuerpo (solo llamadas simples por nombre)."""
+    import ast
+
+    return {
+        h.func.id
+        for h in ast.walk(nodo)
+        if isinstance(h, ast.Call) and isinstance(h.func, ast.Name)
+    }
+
+
+def _degradaciones(vieja, nueva, ayudantes: set[str]) -> list[str]:
+    """Qué perdió la versión nueva respecto de la vieja.
+
+    Cada comprobación existe porque se observó la regresión concreta contra
+    Gemini el 2026-08-21: al pedirle "corrige `mediana`" devolvía una función
+    correcta que además renombraba el parámetro, borraba el docstring, quitaba
+    las anotaciones y duplicaba a mano la validación que hacía `_validar`.
+    Todo eso pasaba las pruebas del proyecto, así que ninguna suite lo veía.
+
+    Se comprueba PÉRDIDA, no igualdad: mejorar el docstring o añadir un tipo
+    que faltaba es legítimo; quitarlos no.
+    """
+    import ast
+
+    problemas: list[str] = []
+
+    firma_vieja, firma_nueva = _firma(vieja), _firma(nueva)
+    if firma_vieja != firma_nueva:
+        problemas.append(
+            f"la firma cambió de ({', '.join(firma_vieja)}) a "
+            f"({', '.join(firma_nueva)}); renombrar un parámetro rompe a quien "
+            "llame por nombre"
+        )
+
+    if ast.get_docstring(vieja) and not ast.get_docstring(nueva):
+        problemas.append(
+            "se eliminó el docstring, que es la especificación contra la que se "
+            "detectan los errores de esta función"
+        )
+
+    perdidas = _anotados(vieja) - _anotados(nueva)
+    if perdidas:
+        problemas.append(
+            "se perdieron anotaciones de tipo en: " + ", ".join(sorted(perdidas))
+        )
+
+    usados_antes = _llamadas(vieja) & ayudantes
+    perdidos = usados_antes - _llamadas(nueva)
+    if perdidos:
+        problemas.append(
+            "ya no se llama a "
+            + ", ".join(f"`{n}`" for n in sorted(perdidos))
+            + "; duplicar esa lógica en línea la hace divergir del resto del "
+            "módulo"
+        )
+
+    return problemas
+
+
 def reemplazar_funcion(original: str, nombre: str, codigo: str) -> tuple[str, str]:
     """Sustituye la función `nombre` por `codigo`. Devuelve `(contenido, error)`.
 
@@ -99,6 +189,11 @@ def reemplazar_funcion(original: str, nombre: str, codigo: str) -> tuple[str, st
     El localizador es `ast`, no una expresión regular: la posición de la
     función la decide el parser de Python, no una heurística de texto. Se
     incluyen los decoradores en el tramo sustituido para no dejarlos huérfanos.
+
+    Además se RECHAZA la sustitución que degrade la función: cambiar la firma,
+    borrar el docstring, quitar anotaciones o dejar de usar los ayudantes del
+    módulo. Una corrección no puede empeorar lo que no se le pidió tocar, y las
+    pruebas del proyecto no ven ese tipo de daño (ver `_degradaciones`).
     """
     import ast
 
@@ -124,6 +219,36 @@ def reemplazar_funcion(original: str, nombre: str, codigo: str) -> tuple[str, st
             "ambiguo cuál sustituir. No se escribió nada."
         )
 
+    problema = error_de_sintaxis("x.py", codigo)
+    if problema:
+        return "", problema
+
+    nuevas = [
+        n
+        for n in ast.parse(codigo).body
+        if isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef)
+        and n.name == nombre
+    ]
+    if len(nuevas) != 1:
+        return "", (
+            f"El código nuevo debe definir exactamente una función '{nombre}'. "
+            "No se escribió nada."
+        )
+
+    ayudantes = {
+        n.name
+        for n in arbol.body
+        if isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef)
+    }
+    degradaciones = _degradaciones(definiciones[0], nuevas[0], ayudantes)
+    if degradaciones:
+        return "", (
+            f"La versión nueva de '{nombre}' degrada la existente: "
+            + "; ".join(degradaciones)
+            + ". Corrige SOLO lo pedido y conserva lo demás tal cual. "
+            "No se escribió nada."
+        )
+
     definicion = definiciones[0]
     # `lineno` apunta al `def`; los decoradores van antes y deben ir con él.
     inicio = min(
@@ -132,8 +257,8 @@ def reemplazar_funcion(original: str, nombre: str, codigo: str) -> tuple[str, st
     fin = definicion.end_lineno or definicion.lineno
 
     lineas = original.splitlines(keepends=True)
-    nuevo = codigo if codigo.endswith("\n") else codigo + "\n"
-    resultado = "".join(lineas[: inicio - 1]) + nuevo + "".join(lineas[fin:])
+    nuevo_codigo = codigo if codigo.endswith("\n") else codigo + "\n"
+    resultado = "".join(lineas[: inicio - 1]) + nuevo_codigo + "".join(lineas[fin:])
 
     problema = error_de_sintaxis("x.py", resultado)
     if problema:
