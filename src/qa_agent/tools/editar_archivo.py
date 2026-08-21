@@ -12,6 +12,7 @@ from __future__ import annotations
 from typing import Any
 
 from qa_agent.agent.backup import BackupManager
+from qa_agent.tools.validacion_sintaxis import error_de_sintaxis
 from qa_agent.tools.allowlist import Allowlist
 from qa_agent.tools.base import (
     EstadoResultado,
@@ -100,6 +101,18 @@ class EditarArchivoHerramienta(Herramienta):
                     "El archivo no existe; no se editó nada. "
                     "Usa crear_archivo para crearlo (FR-043)."
                 ),
+            )
+
+        # Se valida ANTES de respaldar y escribir: si el contenido no puede
+        # ejecutarse, no hay edición que discutir y el archivo bueno se queda
+        # como está (ver `tools/validacion_sintaxis.py`).
+        problema = error_de_sintaxis(archivo_relativo, contenido)
+        if problema:
+            return ResultadoDeHerramienta(
+                herramienta_id=self.id,
+                estado=EstadoResultado.INVALIDO,
+                datos={},
+                error=problema,
             )
 
         try:

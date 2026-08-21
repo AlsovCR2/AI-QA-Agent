@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import Any
 
 from qa_agent.tools.allowlist import Allowlist
+from qa_agent.tools.validacion_sintaxis import error_de_sintaxis
 from qa_agent.tools.base import (
     EstadoResultado,
     Herramienta,
@@ -100,6 +101,23 @@ class CrearArchivoHerramienta(Herramienta):
                     "El archivo ya existe; no se creó nada. "
                     "Usa editar_archivo para modificarlo (FR-042)."
                 ),
+            )
+
+        # Mismo criterio que en `editar_archivo`: no se crea un archivo que no
+        # puede ejecutarse (ver `tools/validacion_sintaxis.py`). Aquí no hay
+        # nada que destruir, pero un archivo roto en disco es igual de inútil y
+        # además el agente lo daría por creado.
+        problema = error_de_sintaxis(archivo_relativo, contenido)
+        if problema:
+            return ResultadoDeHerramienta(
+                herramienta_id=self.id,
+                estado=EstadoResultado.INVALIDO,
+                datos={
+                    "archivo": archivo_relativo,
+                    "creado": False,
+                    "existia": False,
+                },
+                error=problema,
             )
 
         try:
