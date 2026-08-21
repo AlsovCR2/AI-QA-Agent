@@ -15,7 +15,15 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from qa_agent.agent.grounding import _afirmaciones_no_ancladas
+from qa_agent.agent.grounding import (
+    _afirmaciones_no_ancladas,
+    nota_de_fallos,
+    nota_de_resultado_fallido,
+    observaciones_con_fallo_reportado,
+    observaciones_fallidas,
+    texto_declara_el_fallo,
+    texto_ya_declara,
+)
 from qa_agent.agent.tracing import (
     AUTORIZACION,
     ERROR,
@@ -1467,6 +1475,37 @@ class Agent:
             and _afirmaciones_no_ancladas(texto_final, observaciones)
         ):
             confianza = Confianza.LIMITADA
+
+        # Honestidad ante fallos (FR-018 / IX): si alguna herramienta falló
+        # durante ESTA solicitud, la respuesta no puede reportar confianza alta
+        # y el fallo tiene que ser legible sin abrir el panel de razonamiento.
+        #
+        # La regla es estructural a propósito: no se intenta detectar si el
+        # texto "afirma éxito", porque eso es análisis de lenguaje y falla justo
+        # con las redacciones ambiguas. Un fallo observado degrada la confianza,
+        # afirme lo que afirme el backend.
+        fallidas = observaciones_fallidas(observaciones)
+        if fallidas:
+            if confianza == Confianza.ALTA:
+                confianza = Confianza.LIMITADA
+            if not texto_ya_declara(texto_final, fallidas):
+                texto_final += nota_de_fallos(fallidas)
+
+        # Segundo caso, distinto del anterior: la herramienta funcionó y lo que
+        # OBSERVÓ salió mal (ADR-006: `run_tests` que corre bien y encuentra
+        # pruebas rotas devuelve EXITO con `estado_global='fallo'`).
+        #
+        # Aquí la observación sí es evidencia válida, así que informar de que 2
+        # pruebas fallan es una respuesta correcta y no se penaliza. Lo que no
+        # puede pasar es que la respuesta lo OMITA y presente el trabajo como
+        # limpio, que es exactamente lo que se observó contra un modelo real.
+        con_mal_resultado = observaciones_con_fallo_reportado(observaciones)
+        if con_mal_resultado and not texto_declara_el_fallo(
+            texto_final, con_mal_resultado
+        ):
+            if confianza == Confianza.ALTA:
+                confianza = Confianza.LIMITADA
+            texto_final += nota_de_resultado_fallido(con_mal_resultado)
 
         return RespuestaDelAgente(
             texto=texto_final,

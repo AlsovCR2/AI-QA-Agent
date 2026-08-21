@@ -32,6 +32,7 @@ from qa_agent.config import (
     construir_herramientas,
 )
 from qa_agent.logging_config import get_logger
+from qa_agent.tools.base import EstadoResultado
 from qa_agent.agent.tracing import Trazador
 from qa_agent.security.redactor import Redactor
 
@@ -64,6 +65,60 @@ def _acotar_render(texto: str, max_chars: int = 1000) -> str:
 # contexto LLM), sin el marcador engañoso "[+N chars]" que hacía creer que la
 # lectura de la clase falló por truncamiento.
 _RENDER_MAX_CHARS_LEER_ARCHIVO = 6000
+
+
+# Señal visual de estado por paso. Sin esto, un paso fallido se veía idéntico a
+# uno correcto: el caso que motivó esto tenía `run_tests` devolviendo ERROR
+# entre dos pasos válidos y en pantalla los tres parecían iguales.
+_MARCA_EXITO = "✓"
+_MARCA_FALLO = "✗"
+_MARCA_NEUTRA = "·"
+
+# Un valor más largo que esto, o con saltos de línea, se imprime como bloque
+# aparte en vez de en la línea de campos: mezclarlo inline es lo que hacía
+# ilegible el panel.
+_MAX_VALOR_INLINE = 60
+
+
+def _marca_estado(resultado) -> str:
+    """Marca visual según el estado del resultado de la herramienta."""
+    estado = getattr(resultado, "estado", None)
+    if estado in (EstadoResultado.ERROR, EstadoResultado.INVALIDO):
+        return _MARCA_FALLO
+    if estado == EstadoResultado.EXITO:
+        return _MARCA_EXITO
+    return _MARCA_NEUTRA
+
+
+def _formatear_observacion(salida, max_chars: int) -> str:
+    """Convierte la salida de una herramienta en texto legible.
+
+    Antes se imprimía `str(dict)`: un `repr` de Python con los saltos de línea
+    escapados, envuelto por el ancho del panel. La información estaba, pero
+    leerla exigía descifrarla.
+
+    Ahora los campos cortos van en una línea de `clave: valor`, y los largos o
+    multilínea van como bloque propio con sus saltos reales. El recorte sigue
+    aplicándose sobre el resultado final (T094): la legibilidad no puede costar
+    un volcado sin límite.
+    """
+    if not isinstance(salida, dict):
+        return _acotar_render(str(salida), max_chars)
+
+    campos: list[str] = []
+    bloques: list[str] = []
+    for clave, valor in salida.items():
+        texto = valor if isinstance(valor, str) else str(valor)
+        if "\n" in texto or len(texto) > _MAX_VALOR_INLINE:
+            bloques.append(f"{clave}:\n{texto}")
+        else:
+            campos.append(f"{clave}: {texto}")
+
+    partes = []
+    if campos:
+        partes.append(" · ".join(campos))
+    partes.extend(bloques)
+    return _acotar_render("\n".join(partes), max_chars)
 
 
 def _version_callback(value: bool) -> None:
@@ -420,11 +475,20 @@ def _renderizar_respuesta(respuesta, mostrar_historial: bool = False) -> None:
             # vienen del modelo y de las herramientas, y Rich interpretaría sus
             # corchetes como marcado. Sin esto, `ordenados[medio]` se imprime
             # como `ordenados` y el panel deja de ser evidencia fiable.
+            observado = _formatear_observacion(salida, max_chars)
+            sangrado = "\n".join(
+                f"     {linea}" for linea in observado.splitlines()
+            )
+            # `escape` es obligatorio aquí: razón, parámetros y observación
+            # vienen del modelo y de las herramientas, y Rich interpretaría sus
+            # corchetes como marcado. Sin esto, `ordenados[medio]` se imprime
+            # como `ordenados` y el panel deja de ser evidencia fiable.
             lineas.append(
                 escape(
-                    f"{paso.orden}. {paso.razon or paso.herramienta} "
-                    f"-> {paso.herramienta} {str(paso.parametros)}\n"
-                    f"   observación: {_acotar_render(str(salida), max_chars)}"
+                    f"{paso.orden}. {_marca_estado(resultado)} {paso.herramienta}"
+                    f" — {paso.razon or paso.herramienta}\n"
+                    f"   parámetros: {str(paso.parametros)}\n"
+                    f"   observación:\n{sangrado}"
                 )
             )
         _console.print(
