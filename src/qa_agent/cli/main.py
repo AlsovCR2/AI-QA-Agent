@@ -17,6 +17,7 @@ from typing import Optional
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 
@@ -415,20 +416,26 @@ def _renderizar_respuesta(respuesta, mostrar_historial: bool = False) -> None:
                 if paso.herramienta == "leer_archivo"
                 else 1000
             )
+            # `escape` es obligatorio aquí: razón, parámetros y observación
+            # vienen del modelo y de las herramientas, y Rich interpretaría sus
+            # corchetes como marcado. Sin esto, `ordenados[medio]` se imprime
+            # como `ordenados` y el panel deja de ser evidencia fiable.
             lineas.append(
-                f"{paso.orden}. {paso.razon or paso.herramienta} "
-                f"-> {paso.herramienta} {str(paso.parametros)}\n"
-                f"   observación: {_acotar_render(str(salida), max_chars)}"
+                escape(
+                    f"{paso.orden}. {paso.razon or paso.herramienta} "
+                    f"-> {paso.herramienta} {str(paso.parametros)}\n"
+                    f"   observación: {_acotar_render(str(salida), max_chars)}"
+                )
             )
         _console.print(
             Panel("\n".join(lineas), title="Razonamiento", border_style="cyan")
         )
     _console.print(
-        Panel(respuesta.texto, title="Respuesta", border_style="green")
+        Panel(escape(respuesta.texto), title="Respuesta", border_style="green")
     )
     if getattr(respuesta, "recomendaciones", None):
         recomendaciones = "\n".join(
-            f"• {rec}" for rec in respuesta.recomendaciones
+            f"• {escape(str(rec))}" for rec in respuesta.recomendaciones
         )
         _console.print(
             Panel(
@@ -449,11 +456,13 @@ def _renderizar_respuesta(respuesta, mostrar_historial: bool = False) -> None:
                 if accion.herramienta_id == "leer_archivo"
                 else 1000
             )
+            # `Table.add_row` también interpreta marcado: la salida de la
+            # herramienta se escapa por la misma razón que en el panel.
             tabla.add_row(
                 str(accion.orden),
                 accion.herramienta_id,
                 accion.estado.value,
-                _acotar_render(str(accion.salida), max_chars),
+                escape(_acotar_render(str(accion.salida), max_chars)),
             )
         _console.print(tabla)
 
