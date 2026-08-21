@@ -11,18 +11,12 @@ from pathlib import Path
 
 import pathspec
 
+from qa_agent.tools.exclusion_policy import PATRONES_EXCLUSION_ALLOWLIST
+
 # Patrones de exclusión por defecto: directorios habituales a ignorar.
-_EXCLUSIONES_DEFECTO = (
-    ".git/",
-    "__pycache__/",
-    "*.pyc",
-    ".venv/",
-    "node_modules/",
-    "dist/",
-    "build/",
-    ".pytest_cache/",
-    ".env",
-)
+# Centralizados en `exclusion_policy.py` (I07): ver ese módulo para el
+# inventario de duplicados resuelto y las decisiones (rulings) tomadas.
+_EXCLUSIONES_DEFECTO = PATRONES_EXCLUSION_ALLOWLIST
 
 
 class Allowlist:

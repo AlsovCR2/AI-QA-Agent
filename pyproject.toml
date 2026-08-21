@@ -1,5 +1,9 @@
 [build-system]
-requires = ["setuptools>=68"]
+# Suelo subido de 68 a 83 el 2026-08-21: `pip-audit` en CI marcó
+# PYSEC-2026-3447 contra setuptools 79.0.1, corregido en 83.0.0. setuptools solo
+# se usa para construir (no es dependencia de runtime), pero construir con una
+# versión vulnerable es exactamente lo que el audit existe para impedir.
+requires = ["setuptools>=83"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -21,6 +25,10 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest",
+    "ruff>=0.16,<0.17",
+    "coverage>=7.15,<8",
+    "pip-audit>=2.10,<3",
+    "mypy>=1.18,<2",
 ]
 
 [project.scripts]
@@ -32,3 +40,84 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 norecursedirs = ["tests/fixtures"]
+
+[tool.coverage.run]
+# I05 (ADR-003): informational coverage reporting only. No fail_under is set
+# here because Constitution XII forbids imposing arbitrary thresholds without
+# separate justification; a threshold gate is a future decision, not part of
+# this adoption.
+source = ["qa_agent"]
+branch = true
+
+[tool.coverage.report]
+skip_empty = true
+
+[tool.ruff]
+# I05 (ADR-003): lint only. `ruff format` is NOT adopted yet — see ADR-003
+# for the baseline (77/145 files would be reformatted) and the deferral
+# rationale. Do not add a `ruff format` CI step without a follow-up decision.
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+# Deliberately small, high-signal rule set (pyflakes correctness rules +
+# pycodestyle error/runtime classes). This mirrors Ruff's historical default
+# selection. Broader rule families evaluated in ADR-003 (RUF, TRY, BLE, PL*,
+# S, SIM, UP, I, DTZ, FURB, PIE, ISC) are deferred — enabling them today
+# raised the finding count from 41 to 178, which would require edits far
+# beyond this item's scope, including files owned by other in-flight work
+# this wave.
+select = ["E4", "E7", "E9", "F"]
+
+[tool.ruff.lint.per-file-ignores]
+# Baseline captured 2026-08-20 when Ruff was adopted (ADR-003). These are
+# PRE-EXISTING findings, not newly introduced by I05, and are intentionally
+# NOT auto-fixed here to avoid an edit storm across files outside I04/I05
+# scope (several are owned by other people's in-flight work this wave).
+# New findings in these files (beyond the listed codes) still fail CI.
+# Shrink this list opportunistically as each file is next touched by its
+# owner; do not silently add new codes to an existing entry.
+"src/qa_agent/agent/gestor_tareas.py" = ["F401"]
+"src/qa_agent/agent/reasoning.py" = ["E402"]
+"src/qa_agent/agent/response.py" = ["F401"]
+# router.py is owned by Person 1 this wave (loop.py/router.py freeze) and is
+# intentionally left untouched, including this ignore, rather than edited.
+"src/qa_agent/agent/router.py" = ["F401"]
+"src/qa_agent/agent/session_manager.py" = ["F401"]
+"src/qa_agent/security/authorization.py" = ["F401"]
+"src/qa_agent/tools/analyze_test_results.py" = ["F401"]
+"tests/unit/test_agent_qa_integration.py" = ["F401"]
+"tests/unit/test_backup.py" = ["F401"]
+"tests/unit/test_llm_backend_json.py" = ["F401"]
+"tests/unit/test_reasoning.py" = ["F401", "F811"]
+"tests/unit/test_redactor.py" = ["F401"]
+"tests/unit/test_tools_analyze_results.py" = ["F401"]
+"tests/unit/test_tools_crear_archivo.py" = ["F401"]
+"tests/unit/test_tools_explore.py" = ["F401", "F841"]
+"tests/unit/test_tools_generate_cases.py" = ["F401"]
+"tests/unit/test_tools_locate.py" = ["F401", "F841"]
+"tests/unit/test_tools_search.py" = ["F401"]
+
+[tool.mypy]
+# T228 (ADR-003 revisado). Adopción POR ETAPAS, no global: ADR-003 midió 45
+# errores de mypy sobre el código existente —varios en el `loop.py` que estaba
+# congelado— y difirió la adopción para no provocar una tormenta de ediciones.
+# Esa medición sigue siendo válida, así que aquí solo se comprueban los módulos
+# escritos con anotaciones completas desde el principio (T206/T213/T223/T217).
+# Cada módulo existente se añade a `files` cuando su dueño lo tipe, no antes.
+#
+# VERIFICADO 2026-08-21 en macOS con mypy 1.20.2: `python -m mypy` → "Success:
+# no issues found in 7 source files". Solo entonces se añadió el paso de CI
+# correspondiente (job `quality`), siguiendo la regla de no introducir un gate
+# que nadie ha visto pasar.
+python_version = "3.11"
+files = [
+    "src/qa_agent/tools/ejecucion.py",
+    "src/qa_agent/tools/runner_registry.py",
+    "src/qa_agent/tools/exclusion_policy.py",
+    "src/qa_agent/agent/tracing.py",
+    "src/qa_agent/evaluacion/",
+]
+strict = true
+warn_unused_ignores = true
+show_error_codes = true

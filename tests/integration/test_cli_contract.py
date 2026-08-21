@@ -11,8 +11,16 @@ from typer.testing import CliRunner
 from qa_agent.cli.main import app
 
 
+# Rich (vía Typer) formatea la ayuda al ancho del terminal y trunca los nombres
+# de opción cuando es estrecho. En un runner de CI el ancho por defecto es 80,
+# lo que hacía fallar este contrato por el entorno y no por el producto. Se fija
+# un ancho explícito: el test verifica QUÉ opciones existen, no cómo se envuelven
+# (FR-103).
+_ENTORNO_ANCHO = {"COLUMNS": "200", "TERM": "dumb", "NO_COLOR": "1"}
+
+
 def test_t129_flags_documentados_son_opciones_del_punto_de_entrada():
-    resultado = CliRunner().invoke(app, ["--help"])
+    resultado = CliRunner().invoke(app, ["--help"], env=_ENTORNO_ANCHO)
 
     assert resultado.exit_code == 0
     for opcion in (

@@ -14,7 +14,7 @@ puede ser asistido por LLM (VI).
 from __future__ import annotations
 
 import re
-import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +23,21 @@ from qa_agent.tools.base import (
     EstadoResultado,
     Herramienta,
     ResultadoDeHerramienta,
+)
+from qa_agent.tools.ejecucion import (
+    CAUSAS,
+    COMANDO_NO_PERMITIDO,
+    EJECUTADO,
+    ERROR_DE_EJECUCION,
+    RUNNER_NO_DISPONIBLE,
+    RUTA_INVALIDA,
+    SALIDA_NO_PARSEABLE,
+    SIN_PRUEBAS,
+    TIMEOUT,
+    MetadatosDeEjecucion,
+    clasificar_salida,
+    ejecutar_comando,
+    metadatos_sin_ejecutar,
 )
 
 
@@ -59,6 +74,58 @@ _COMANDOS_PERMITIDOS = {
     "gradle test --console=plain",
     "gradlew test",
     "gradlew test --console=plain",
+    # JS/TS (T224 / FR-122). Se admiten los tres gestores porque el manifiesto
+    # (`package.json`) es el mismo y el gestor concreto lo elige el proyecto.
+    # El comando delega en el script `test` declarado por el propio proyecto:
+    # no se inventa un runner (jest/vitest/mocha) que podría no estar.
+    "npm test",
+    "npm test --silent",
+    "npm run test",
+    "yarn test",
+    "pnpm test",
+    # Go: el runner es parte de la toolchain, no un plugin.
+    "go test ./...",
+    "go test ./... -v",
+    # Rust
+    "cargo test",
+    "cargo test --quiet",
+}
+
+
+def _datos_no_ejecutado(metadatos: MetadatosDeEjecucion) -> dict[str, Any]:
+    """Resultado sin pruebas ejecutadas, acompañado de la causa (FR-105/106).
+
+    Los contadores en cero son la forma honesta de decir "no hay dato", y los
+    metadatos explican por qué. Antes se devolvía solo el bloque de ceros, que
+    era indistinguible entre "no hay pruebas", "el runner no existe" y "la
+    colección falló" — la ambigüedad que motivó T208.
+    """
+    return {
+        "pasadas": 0,
+        "falladas": 0,
+        "errores": 0,
+        "total": 0,
+        "estado_global": "no_ejecutado",
+        "detalle_fallos": [],
+        **metadatos.como_dict(),
+    }
+
+
+# Mensaje accionable por causa. Se mantiene aquí y no en `ejecucion.py` porque
+# el texto es específico del dominio de esta herramienta (IX).
+_MENSAJE_POR_CAUSA = {
+    TIMEOUT: "Timeout: la ejecución de pruebas excedió el tiempo permitido.",
+    RUNNER_NO_DISPONIBLE: (
+        "El runner de pruebas no está disponible en este entorno; "
+        "las pruebas no se ejecutaron."
+    ),
+    ERROR_DE_EJECUCION: "Error del sistema al ejecutar el comando de pruebas.",
+    RUTA_INVALIDA: "La ruta del proyecto no es válida; las pruebas no se ejecutaron.",
+    COMANDO_NO_PERMITIDO: "El comando de pruebas no está permitido.",
+    SALIDA_NO_PARSEABLE: (
+        "La ejecución terminó pero su salida no coincide con ningún formato "
+        "de runner conocido."
+    ),
 }
 
 
@@ -79,7 +146,20 @@ class RunTestsHerramienta(Herramienta):
         "properties": {
             "ruta": {"type": "string", "description": "Raíz del proyecto donde ejecutar las pruebas"},
             "conjunto_autorizado": {"type": "boolean", "description": "Indica si el conjunto de pruebas está autorizado"},
-            "comando_pruebas": {"type": "string", "description": "Comando autorizado y acotado (p. ej. 'pytest', 'pytest -v')"},
+            "comando_pruebas": {
+                "type": "string",
+                # El `enum` se deriva de la allowlist para que no puedan
+                # divergir. Enumerarlos aquí NO amplía el perímetro —la
+                # validación real sigue en `_comando_permitido`—, sino que le
+                # dice al modelo qué puede pedir. Sin esto proponía comandos
+                # como 'pytest tests/x.py' o 'pytest --cov=...', que se
+                # rechazan siempre y desperdician un paso del presupuesto.
+                "enum": sorted(_COMANDOS_PERMITIDOS),
+                "description": (
+                    "Comando EXACTO de la allowlist. No admite argumentos "
+                    "adicionales (rutas, -k, --cov): usa el comando tal cual."
+                ),
+            },
         },
         "required": ["ruta", "conjunto_autorizado", "comando_pruebas"],
     }
@@ -103,6 +183,17 @@ class RunTestsHerramienta(Herramienta):
                     "required": ["nombre", "mensaje_error", "ruta_relativa"],
                 },
             },
+            # Metadatos de ejecución (T207 / FR-105). Aditivos a propósito:
+            # NO se añaden a `required` para no invalidar los resultados que ya
+            # construyen consumidores existentes ni los 92 casos de la suite de
+            # compatibilidad de ADR-002 (FR-109). Que la herramienta SIEMPRE los
+            # emita se garantiza por test, no por el esquema.
+            "exit_code": {"type": "integer"},
+            "runner_detectado": {"type": "string"},
+            "duracion_ms": {"type": "integer"},
+            "stdout_tail": {"type": "string"},
+            "stderr_tail": {"type": "string"},
+            "causa_no_ejecutado": {"type": "string", "enum": list(CAUSAS)},
         },
         "required": ["pasadas", "falladas", "errores", "total", "estado_global", "detalle_fallos"],
     }
@@ -123,14 +214,20 @@ class RunTestsHerramienta(Herramienta):
     def _normalizar_comando(self, comando: str) -> list[str]:
         """Normaliza el comando para ejecución segura (usa python -m pytest si pytest directo falla)."""
         cmd = comando.strip()
-        # En Windows, pytest puede no estar en PATH, usar python -m pytest
+        # `pytest` puede no estar en PATH (Windows, entornos virtuales sin
+        # activar) → se invoca como módulo del intérprete ACTUAL. Nunca el
+        # literal "python": en macOS y en las distribuciones Linux que solo
+        # instalan `python3` ese binario no existe y la ejecución falla con
+        # FileNotFoundError (FR-101).
         if cmd.startswith("pytest "):
             partes = cmd.split()
-            return ["python", "-m", "pytest"] + partes[1:]
+            return [sys.executable, "-m", "pytest"] + partes[1:]
         elif cmd == "pytest":
-            return ["python", "-m", "pytest"]
+            return [sys.executable, "-m", "pytest"]
         elif cmd.startswith("python -m pytest"):
-            return cmd.split()
+            # Se reescribe el token "python" al intérprete actual por la misma
+            # razón; el resto del comando se conserva tal cual (FR-101).
+            return [sys.executable] + cmd.split()[1:]
         else:
             return cmd.split()
 
@@ -376,23 +473,21 @@ class RunTestsHerramienta(Herramienta):
             return ResultadoDeHerramienta(
                 herramienta_id=self.id,
                 estado=EstadoResultado.INVALIDO,
-                datos={
-                    "pasadas": 0,
-                    "falladas": 0,
-                    "errores": 0,
-                    "total": 0,
-                    "estado_global": "no_ejecutado",
-                    "detalle_fallos": [],
-                },
+                datos=_datos_no_ejecutado(
+                    metadatos_sin_ejecutar(RUTA_INVALIDA, comando_pruebas)
+                ),
                 error="Conjunto de pruebas no autorizado para ejecución (FR-012).",
             )
 
         # Mínimo privilegio: allowlist de rutas (FR-025 / SC-011)
         if self._allowlist is not None and not self._allowlist.contiene(ruta_raw):
+            # Rechazo ANTES de ejecutar: no se emiten contadores de pruebas
+            # (no hay ninguna que contar), solo la causa legible por máquina
+            # (FR-106). Nada aquí puede confundirse con un resultado real.
             return ResultadoDeHerramienta(
                 herramienta_id=self.id,
                 estado=EstadoResultado.ERROR,
-                datos={},
+                datos=metadatos_sin_ejecutar(RUTA_INVALIDA, comando_pruebas).como_dict(),
                 error=(
                     "La ruta solicitada queda fuera de las rutas autorizadas "
                     "(FR-025)."
@@ -404,7 +499,9 @@ class RunTestsHerramienta(Herramienta):
             return ResultadoDeHerramienta(
                 herramienta_id=self.id,
                 estado=EstadoResultado.INVALIDO,
-                datos={},
+                datos=metadatos_sin_ejecutar(
+                    COMANDO_NO_PERMITIDO, comando_pruebas
+                ).como_dict(),
                 error=(
                     f"Comando de pruebas no permitido: '{comando_pruebas}'. "
                     "Solo se permiten comandos de la allowlist segura (SC-011)."
@@ -416,103 +513,74 @@ class RunTestsHerramienta(Herramienta):
             return ResultadoDeHerramienta(
                 herramienta_id=self.id,
                 estado=EstadoResultado.ERROR,
-                datos={
-                    "pasadas": 0,
-                    "falladas": 0,
-                    "errores": 0,
-                    "total": 0,
-                    "estado_global": "no_ejecutado",
-                    "detalle_fallos": [],
-                },
+                datos=_datos_no_ejecutado(
+                    metadatos_sin_ejecutar(RUTA_INVALIDA, comando_pruebas)
+                ),
                 error="La ruta del proyecto no existe; las pruebas no se ejecutaron.",
             )
 
-        # Ejecutar comando
-        try:
-            # Usar shell=False para seguridad, usar comando normalizado
-            cmd_parts = self._normalizar_comando(comando_pruebas)
-            resultado_proc = subprocess.run(
-                cmd_parts,
-                cwd=str(ruta),
-                capture_output=True,
-                text=True,
-                timeout=120,  # Timeout 2 minutos
-            )
-            salida_completa = resultado_proc.stdout + "\n" + resultado_proc.stderr
-        except subprocess.TimeoutExpired:
+        # Ejecutar (shell=False, intérprete portable) y describir el intento.
+        proceso, metadatos = ejecutar_comando(
+            self._normalizar_comando(comando_pruebas),
+            cwd=str(ruta),
+            comando_original=comando_pruebas,
+        )
+
+        if proceso is None:
+            # No se llegó a ejecutar. `metadatos.causa_no_ejecutado` ya
+            # distingue timeout, runner ausente y error del sistema (FR-106),
+            # en vez del "no_ejecutado" opaco que se emitía antes.
             return ResultadoDeHerramienta(
                 herramienta_id=self.id,
                 estado=EstadoResultado.ERROR,
-                datos={
-                    "pasadas": 0,
-                    "falladas": 0,
-                    "errores": 0,
-                    "total": 0,
-                    "estado_global": "no_ejecutado",
-                    "detalle_fallos": [],
-                },
-                error="Timeout: la ejecución de pruebas excedió 120 segundos.",
+                datos=_datos_no_ejecutado(metadatos),
+                error=_MENSAJE_POR_CAUSA.get(
+                    metadatos.causa_no_ejecutado,
+                    "Las pruebas no se ejecutaron.",
+                ),
             )
-        except (OSError, subprocess.SubprocessError) as e:
-            return ResultadoDeHerramienta(
-                herramienta_id=self.id,
-                estado=EstadoResultado.ERROR,
-                datos={
-                    "pasadas": 0,
-                    "falladas": 0,
-                    "errores": 0,
-                    "total": 0,
-                    "estado_global": "no_ejecutado",
-                    "detalle_fallos": [],
-                },
-                error=f"Error ejecutando comando de pruebas: {e}",
-            )
+
+        salida_completa = proceso.stdout + "\n" + proceso.stderr
 
         # Parsear salida
         datos = self._parsear_salida(salida_completa, comando_pruebas)
 
         estado_global = datos.get("estado_global")
-        salida_normalizada = salida_completa.lower()
-        cero_tests_explicito = any(
-            marca in salida_normalizada
-            for marca in (
-                "no tests ran",
-                "collected 0 items",
-                "no tests found",
-                "no test is available",
-            )
-        )
+        causa_textual = clasificar_salida(salida_completa)
+        cero_tests_explicito = causa_textual == SIN_PRUEBAS
         fallo_de_tests_valido = (
             estado_global == "fallo"
-            and resultado_proc.returncode in {0, 1}
+            and proceso.returncode in {0, 1}
         )
         exito_valido = (
             estado_global == "exito"
-            and resultado_proc.returncode == 0
+            and proceso.returncode == 0
         )
         cero_tests_valido = (
             estado_global == "no_ejecutado"
             and cero_tests_explicito
-            and resultado_proc.returncode in {0, 5}
+            and proceso.returncode in {0, 5}
         )
 
         if not (fallo_de_tests_valido or exito_valido or cero_tests_valido):
+            # La ejecución ocurrió pero su salida no encaja con ningún formato
+            # conocido: se distingue de "no se pudo ejecutar" porque hay
+            # exit_code y colas reales que el usuario puede inspeccionar.
+            causa = causa_textual if causa_textual != "" else SALIDA_NO_PARSEABLE
             return ResultadoDeHerramienta(
                 herramienta_id=self.id,
                 estado=EstadoResultado.ERROR,
-                datos={
-                    "pasadas": 0,
-                    "falladas": 0,
-                    "errores": 0,
-                    "total": 0,
-                    "estado_global": "no_ejecutado",
-                    "detalle_fallos": [],
-                },
+                datos=_datos_no_ejecutado(metadatos.con_causa(causa)),
                 error=(
                     "La ejecución de pruebas no produjo un resultado "
-                    f"compatible (returncode={resultado_proc.returncode})."
+                    f"compatible (returncode={proceso.returncode})."
                 ),
             )
+
+        # Ejecución válida. Si el runner corrió pero no había pruebas, la causa
+        # lo dice explícitamente aunque el estado sea de éxito técnico.
+        causa_final = SIN_PRUEBAS if cero_tests_valido else EJECUTADO
+        datos.update(metadatos.con_causa(causa_final).como_dict())
 
         return ResultadoDeHerramienta(
             herramienta_id=self.id,

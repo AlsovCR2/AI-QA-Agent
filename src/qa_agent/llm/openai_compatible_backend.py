@@ -119,13 +119,21 @@ class OpenAICompatibleBackend(LLMBackend):
     def _describir_herramienta(h: Any) -> str:
         """Describe una herramienta con su esquema de entrada (parámetros)."""
         propiedades = (h.esquema_entrada or {}).get("properties", {})
-        if propiedades:
-            params = ", ".join(
-                f"{nombre}={prop.get('type', '?')}"
-                for nombre, prop in propiedades.items()
-            )
-            return f"- {h.id}: {h.descripcion}. Parámetros: {params or 'ninguno'}"
-        return f"- {h.id}: {h.descripcion}."
+        if not propiedades:
+            return f"- {h.id}: {h.descripcion}."
+        # Se incluye la `description` de cada parámetro, no solo su tipo. Antes
+        # solo viajaba `nombre=tipo`, así que toda la guía escrita en el esquema
+        # —qué parámetro preferir, qué debe conservar una edición— no llegaba
+        # nunca al modelo: se enteraba de las reglas al violarlas.
+        partes = []
+        for nombre, prop in propiedades.items():
+            texto = f"{nombre}={prop.get('type', '?')}"
+            detalle = (prop.get("description") or "").strip()
+            if detalle:
+                texto += f" ({OpenAICompatibleBackend._acotar(detalle, 520)})"
+            partes.append(texto)
+        params = "; ".join(partes)
+        return f"- {h.id}: {h.descripcion}. Parámetros: {params or 'ninguno'}"
 
     @staticmethod
     def _resumen_nombres(resultado: Any) -> str:
@@ -360,14 +368,26 @@ class OpenAICompatibleBackend(LLMBackend):
             sistema, f"{intencion.texto}\n\n{intencion.contexto}"
         )
         ids_validos = {h.id for h in catalogo}
-        vistos: set[tuple] = set()
+        vistos: set[str] = set()
         pasos = []
         for paso_dict in datos.get("pasos", []):
             if paso_dict.get("herramienta") not in ids_validos:
                 continue
             parametros = dict(paso_dict.get("parametros") or {})
             # Deduplicar pasos idénticos (misma herramienta + parámetros).
-            clave = (paso_dict["herramienta"], tuple(sorted(parametros.items())))
+            # La clave se serializa a JSON porque un parámetro puede ser una
+            # lista o un dict —`editar_archivo` recibe `reemplazos`, una lista
+            # de objetos— y `tuple(sorted(...))` reventaba con
+            # "unhashable type: 'list'", tumbando la planificación entera y
+            # dejando la solicitud sin ningún paso. `sort_keys` hace la clave
+            # estable, y `default=str` evita que un valor exótico repita el
+            # mismo fallo.
+            clave = json.dumps(
+                [paso_dict["herramienta"], parametros],
+                sort_keys=True,
+                ensure_ascii=False,
+                default=str,
+            )
             if clave in vistos:
                 continue
             vistos.add(clave)

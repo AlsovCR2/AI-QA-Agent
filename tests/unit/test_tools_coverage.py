@@ -8,10 +8,26 @@ from __future__ import annotations
 
 from unittest.mock import Mock, patch
 
-import pytest
 
+from qa_agent.tools.ejecucion import (
+    COMANDO_NO_PERMITIDO,
+    RUTA_INVALIDA,
+    SIN_EJECUTAR,
+)
 from qa_agent.tools.analyze_coverage import AnalyzeCoverageHerramienta
 from qa_agent.tools.base import EstadoResultado
+
+
+# Igual que en `run_tests`: un rechazo previo a la ejecución ya no devuelve un
+# diccionario vacío, sino la causa legible por máquina (T209 / FR-106).
+def _assert_rechazo_sin_ejecutar(resultado, causa_esperada):
+    assert resultado.estado in {EstadoResultado.ERROR, EstadoResultado.INVALIDO}
+    assert resultado.datos["causa_no_ejecutado"] == causa_esperada
+    assert resultado.datos["exit_code"] == SIN_EJECUTAR
+    # Ningún dato de cobertura: nada puede leerse como una medición real.
+    assert "cobertura_global" not in resultado.datos
+    assert "por_archivo" not in resultado.datos
+
 
 
 def test_analyze_coverage_reporte_real(tmp_path):
@@ -97,8 +113,7 @@ def test_analyze_coverage_comando_no_autorizado_rechazado(tmp_path):
         }
     )
 
-    assert resultado.estado in {EstadoResultado.ERROR, EstadoResultado.INVALIDO}
-    assert resultado.datos == {}
+    _assert_rechazo_sin_ejecutar(resultado, COMANDO_NO_PERMITIDO)
 
 
 def test_analyze_coverage_ruta_fuera_allowlist(tmp_path):
@@ -116,8 +131,7 @@ def test_analyze_coverage_ruta_fuera_allowlist(tmp_path):
         }
     )
 
-    assert resultado.estado in {EstadoResultado.ERROR, EstadoResultado.INVALIDO}
-    assert resultado.datos == {}
+    _assert_rechazo_sin_ejecutar(resultado, RUTA_INVALIDA)
 
 
 # -- Ampliación multi-lenguaje: cobertura dotnet (Cobertura XML) y maven (JaCoCo) ----
@@ -252,5 +266,4 @@ def test_analyze_coverage_comando_multilenguaje_fuera_allowlist_rechazado(tmp_pa
                 "comando_cobertura": comando,
             }
         )
-        assert resultado.estado in {EstadoResultado.ERROR, EstadoResultado.INVALIDO}
-        assert resultado.datos == {}
+    _assert_rechazo_sin_ejecutar(resultado, COMANDO_NO_PERMITIDO)

@@ -11,10 +11,13 @@ Renderiza la respuesta y el historial visible con `rich` (FR-020).
 
 from __future__ import annotations
 
+import json
+
 from typing import Optional
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 
@@ -29,6 +32,8 @@ from qa_agent.config import (
     construir_herramientas,
 )
 from qa_agent.logging_config import get_logger
+from qa_agent.tools.base import EstadoResultado
+from qa_agent.agent.tracing import Trazador
 from qa_agent.security.redactor import Redactor
 
 app = typer.Typer(
@@ -62,6 +67,60 @@ def _acotar_render(texto: str, max_chars: int = 1000) -> str:
 _RENDER_MAX_CHARS_LEER_ARCHIVO = 6000
 
 
+# Señal visual de estado por paso. Sin esto, un paso fallido se veía idéntico a
+# uno correcto: el caso que motivó esto tenía `run_tests` devolviendo ERROR
+# entre dos pasos válidos y en pantalla los tres parecían iguales.
+_MARCA_EXITO = "✓"
+_MARCA_FALLO = "✗"
+_MARCA_NEUTRA = "·"
+
+# Un valor más largo que esto, o con saltos de línea, se imprime como bloque
+# aparte en vez de en la línea de campos: mezclarlo inline es lo que hacía
+# ilegible el panel.
+_MAX_VALOR_INLINE = 60
+
+
+def _marca_estado(resultado) -> str:
+    """Marca visual según el estado del resultado de la herramienta."""
+    estado = getattr(resultado, "estado", None)
+    if estado in (EstadoResultado.ERROR, EstadoResultado.INVALIDO):
+        return _MARCA_FALLO
+    if estado == EstadoResultado.EXITO:
+        return _MARCA_EXITO
+    return _MARCA_NEUTRA
+
+
+def _formatear_observacion(salida, max_chars: int) -> str:
+    """Convierte la salida de una herramienta en texto legible.
+
+    Antes se imprimía `str(dict)`: un `repr` de Python con los saltos de línea
+    escapados, envuelto por el ancho del panel. La información estaba, pero
+    leerla exigía descifrarla.
+
+    Ahora los campos cortos van en una línea de `clave: valor`, y los largos o
+    multilínea van como bloque propio con sus saltos reales. El recorte sigue
+    aplicándose sobre el resultado final (T094): la legibilidad no puede costar
+    un volcado sin límite.
+    """
+    if not isinstance(salida, dict):
+        return _acotar_render(str(salida), max_chars)
+
+    campos: list[str] = []
+    bloques: list[str] = []
+    for clave, valor in salida.items():
+        texto = valor if isinstance(valor, str) else str(valor)
+        if "\n" in texto or len(texto) > _MAX_VALOR_INLINE:
+            bloques.append(f"{clave}:\n{texto}")
+        else:
+            campos.append(f"{clave}: {texto}")
+
+    partes = []
+    if campos:
+        partes.append(" · ".join(campos))
+    partes.extend(bloques)
+    return _acotar_render("\n".join(partes), max_chars)
+
+
 def _version_callback(value: bool) -> None:
     """Imprime la versión instalada y termina (--version)."""
     if value:
@@ -69,17 +128,33 @@ def _version_callback(value: bool) -> None:
         raise typer.Exit()
 
 
-def _construir_agente(ruta: str, demo: bool) -> Agent:
+def _construir_agente(
+    ruta: str,
+    demo: bool,
+    *,
+    modelo: str | None = None,
+    base_url: str | None = None,
+    max_pasos: int | None = None,
+    archivo_traza: str | None = None,
+) -> Agent:
     """Construye el `Agent` con backend, herramientas, allowlist y redactor."""
-    backend = construir_backend(demo=demo)
+    backend = construir_backend(demo=demo, modelo=modelo, base_url=base_url)
     allowlist = construir_allowlist(ruta)
     herramientas = construir_herramientas(ruta, backend=backend)
     redactor = Redactor()
+    extra: dict[str, object] = {}
+    if max_pasos is not None:
+        extra["pasos_max"] = max_pasos
+    if archivo_traza:
+        # El trazador comparte el redactor del agente: un único criterio de
+        # redacción para respuesta, historial y traza (XI).
+        extra["trazador"] = Trazador(archivo_traza, redactor=redactor)
     return Agent(
         backend=backend,
         herramientas=herramientas,
         allowlist=allowlist,
         redactor=redactor,
+        **extra,  # type: ignore[arg-type]
     )
 
 
@@ -116,18 +191,47 @@ def _pedir_autorizacion(herramienta_id: str) -> bool:
     return decision in {"si", "sí", "s", "y", "yes"}
 
 
-def _procesar_solicitud(agente: Agent, texto: str):
-    """Procesa una solicitud; si es sensible, captura la decisión del usuario."""
+#: Tope de rondas de autorización por solicitud. Cada ronda es una pregunta
+#: al usuario; sin tope, un plan que se replanifica igual preguntaría sin fin.
+_MAX_RONDAS_AUTORIZACION = 4
+
+
+def _procesar_solicitud(
+    agente: Agent, texto: str, *, simulacion: bool = False, interactivo: bool = True
+):
+    """Procesa una solicitud; si es sensible, captura la decisión del usuario.
+
+    `simulacion` (`--dry-run`, FR-119) y `interactivo=False` (`--json`) NO
+    introducen un camino de ejecución nuevo: simplemente no se concede la
+    autorización, así que la acción sensible queda suspendida por la misma
+    frontera de siempre (T126). No hay forma de que una acción se ejecute sin
+    pasar por ella.
+    """
     respuesta = agente.atender(texto)
-    pendientes = [
-        a
-        for a in respuesta.acciones
-        if a.estado == EstadoAccion.PENDIENTE_AUTORIZACION
-    ]
-    if not pendientes:
-        return respuesta
-    decision = _pedir_autorizacion(pendientes[0].herramienta_id)
-    return agente.atender(texto, autorizacion=decision)
+
+    # Un plan puede tener MÁS de una acción sensible (p. ej. editar_archivo y
+    # después run_tests). Resolvía solo la primera y la segunda quedaba
+    # suspendida en silencio: el usuario decía "sí", veía el archivo sin
+    # cambiar y no había forma de saber por qué. Se itera hasta que no queden
+    # pendientes, con tope para no dar vueltas si el modelo replanifica lo
+    # mismo una y otra vez.
+    ya_preguntadas: set[str] = set()
+    for _ in range(_MAX_RONDAS_AUTORIZACION):
+        pendientes = [
+            a
+            for a in respuesta.acciones
+            if a.estado == EstadoAccion.PENDIENTE_AUTORIZACION
+            and a.herramienta_id not in ya_preguntadas
+        ]
+        if not pendientes:
+            return respuesta
+        if simulacion or not interactivo:
+            return respuesta
+        herramienta_id = pendientes[0].herramienta_id
+        ya_preguntadas.add(herramienta_id)
+        decision = _pedir_autorizacion(herramienta_id)
+        respuesta = agente.atender(texto, autorizacion=decision)
+    return respuesta
 
 
 _AYUDA_CHAT = """\
@@ -333,6 +437,39 @@ def _procesar_mensaje_chat(
     )
 
 
+def _renderizar_json(respuesta, agente: Agent | None = None) -> None:
+    """Imprime la respuesta como JSON en stdout (FR-120).
+
+    Sin ANSI ni paneles: la salida está pensada para que la consuma otro
+    proceso. Se usa `print` y no la consola Rich precisamente para que ningún
+    estilo se cuele en el flujo.
+    """
+    acciones = [
+        {
+            "herramienta": a.herramienta_id,
+            "estado": getattr(a.estado, "value", str(a.estado)),
+        }
+        for a in (respuesta.acciones or [])
+    ]
+    salida = {
+        "solicitud_id": respuesta.solicitud_id,
+        "texto": respuesta.texto,
+        "confianza": getattr(respuesta.confianza, "value", str(respuesta.confianza)),
+        "recomendaciones": list(getattr(respuesta, "recomendaciones", []) or []),
+        "acciones": acciones,
+        "pendiente_autorizacion": any(
+            a["estado"] == EstadoAccion.PENDIENTE_AUTORIZACION.value for a in acciones
+        ),
+    }
+    if agente is not None and agente.trazador.eventos:
+        salida["traza"] = {
+            "pasos": agente.trazador.pasos_ejecutados(),
+            "razon_parada": agente.trazador.razon_de_parada(),
+            "pidio_autorizacion": agente.trazador.pidio_autorizacion(),
+        }
+    print(json.dumps(salida, ensure_ascii=False, indent=2))
+
+
 def _renderizar_respuesta(respuesta, mostrar_historial: bool = False) -> None:
     """Imprime el razonamiento, la respuesta, las recomendaciones y el historial.
 
@@ -352,20 +489,35 @@ def _renderizar_respuesta(respuesta, mostrar_historial: bool = False) -> None:
                 if paso.herramienta == "leer_archivo"
                 else 1000
             )
+            # `escape` es obligatorio aquí: razón, parámetros y observación
+            # vienen del modelo y de las herramientas, y Rich interpretaría sus
+            # corchetes como marcado. Sin esto, `ordenados[medio]` se imprime
+            # como `ordenados` y el panel deja de ser evidencia fiable.
+            observado = _formatear_observacion(salida, max_chars)
+            sangrado = "\n".join(
+                f"     {linea}" for linea in observado.splitlines()
+            )
+            # `escape` es obligatorio aquí: razón, parámetros y observación
+            # vienen del modelo y de las herramientas, y Rich interpretaría sus
+            # corchetes como marcado. Sin esto, `ordenados[medio]` se imprime
+            # como `ordenados` y el panel deja de ser evidencia fiable.
             lineas.append(
-                f"{paso.orden}. {paso.razon or paso.herramienta} "
-                f"-> {paso.herramienta} {str(paso.parametros)}\n"
-                f"   observación: {_acotar_render(str(salida), max_chars)}"
+                escape(
+                    f"{paso.orden}. {_marca_estado(resultado)} {paso.herramienta}"
+                    f" — {paso.razon or paso.herramienta}\n"
+                    f"   parámetros: {str(paso.parametros)}\n"
+                    f"   observación:\n{sangrado}"
+                )
             )
         _console.print(
             Panel("\n".join(lineas), title="Razonamiento", border_style="cyan")
         )
     _console.print(
-        Panel(respuesta.texto, title="Respuesta", border_style="green")
+        Panel(escape(respuesta.texto), title="Respuesta", border_style="green")
     )
     if getattr(respuesta, "recomendaciones", None):
         recomendaciones = "\n".join(
-            f"• {rec}" for rec in respuesta.recomendaciones
+            f"• {escape(str(rec))}" for rec in respuesta.recomendaciones
         )
         _console.print(
             Panel(
@@ -386,11 +538,13 @@ def _renderizar_respuesta(respuesta, mostrar_historial: bool = False) -> None:
                 if accion.herramienta_id == "leer_archivo"
                 else 1000
             )
+            # `Table.add_row` también interpreta marcado: la salida de la
+            # herramienta se escapa por la misma razón que en el panel.
             tabla.add_row(
                 str(accion.orden),
                 accion.herramienta_id,
                 accion.estado.value,
-                _acotar_render(str(accion.salida), max_chars),
+                escape(_acotar_render(str(accion.salida), max_chars)),
             )
         _console.print(tabla)
 
@@ -412,6 +566,40 @@ def main(
         help="Muestra la tabla del historial de acciones (por defecto oculta; "
         "el razonamiento ya traza cada paso, FR-020/035).",
     ),
+    salida_json: bool = typer.Option(
+        False,
+        "--json",
+        help="Emite la respuesta como JSON en stdout, sin ANSI (para CI).",
+    ),
+    sin_color: bool = typer.Option(
+        False, "--no-color", help="Desactiva color y estilos en la salida."
+    ),
+    max_pasos: Optional[int] = typer.Option(
+        None,
+        "--max-steps",
+        help="Presupuesto máximo de pasos del bucle de razonamiento.",
+    ),
+    modelo: Optional[str] = typer.Option(
+        None, "--model", help="Modelo del proveedor; tiene precedencia sobre .env."
+    ),
+    base_url: Optional[str] = typer.Option(
+        None, "--base-url", help="URL base del proveedor; precede a .env."
+    ),
+    simulacion: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Informa qué haría sin ejecutar ninguna acción sensible.",
+    ),
+    archivo_traza: Optional[str] = typer.Option(
+        None,
+        "--trace-file",
+        help="Escribe la traza estructurada (JSONL) en el archivo indicado.",
+    ),
+    evaluar: bool = typer.Option(
+        False,
+        "--eval",
+        help="Ejecuta el harness de evaluación sobre los proyectos de referencia.",
+    ),
     version: Optional[bool] = typer.Option(
         None,
         "--version",
@@ -421,16 +609,47 @@ def main(
     ),
 ) -> None:
     """Inicia el agente REPL interactivo o procesa `--pregunta`."""
+    global _console
+    if sin_color or salida_json:
+        # `--json` implica ausencia de estilos: la salida debe ser parseable
+        # aunque el usuario no pase `--no-color` (FR-120).
+        _console = Console(no_color=True, force_terminal=False, highlight=False)
+
+    if evaluar:
+        # El harness es una herramienta de verificación, no una capacidad del
+        # agente: vive fuera de `src/` y se invoca aquí como bandera y no como
+        # subcomando para no romper el contrato de CLI de un solo punto de
+        # entrada que fija T129 (ver ADR-008).
+        from qa_agent.cli.evaluacion import ejecutar_evaluacion_cli
+
+        raise typer.Exit(ejecutar_evaluacion_cli(ruta, demo, salida_json))
+
     logger = get_logger()
-    agente = _construir_agente(ruta, demo)
+    agente = _construir_agente(
+        ruta,
+        demo,
+        modelo=modelo,
+        base_url=base_url,
+        max_pasos=max_pasos,
+        archivo_traza=archivo_traza,
+    )
     logger.info("qa-agent iniciado (ruta=%s, demo=%s)", ruta, demo)
 
     if pregunta is not None:
-        _renderizar_respuesta(
-            _procesar_solicitud(agente, pregunta),
-            mostrar_historial=mostrar_historial,
+        respuesta = _procesar_solicitud(
+            agente, pregunta, simulacion=simulacion, interactivo=not salida_json
         )
+        if salida_json:
+            _renderizar_json(respuesta, agente)
+        else:
+            _renderizar_respuesta(respuesta, mostrar_historial=mostrar_historial)
         return
+
+    if salida_json:
+        # Sin `--pregunta` no hay nada que serializar: un REPL interactivo y
+        # una salida machine-readable son incompatibles por definición.
+        print(json.dumps({"error": "--json requiere --pregunta"}, ensure_ascii=False))
+        raise typer.Exit(2)
 
     _console.print(
         Panel(
@@ -451,7 +670,7 @@ def main(
             _console.print("Fin de la sesión.")
             return
         _renderizar_respuesta(
-            _procesar_solicitud(agente, texto),
+            _procesar_solicitud(agente, texto, simulacion=simulacion),
             mostrar_historial=mostrar_historial,
         )
 

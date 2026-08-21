@@ -1,0 +1,66 @@
+{
+  "version": 1,
+  "descripcion": "Conjunto fijo de tareas de evaluación del agente (T217 / FR-114). Cada tarea declara qué herramienta debería usarse, qué evidencia real debería aparecer en la respuesta y si la acción requiere decisión humana. Los proyectos de referencia están versionados en evals/datasets: no se descarga nada en tiempo de evaluación.",
+  "tareas": [
+    {
+      "id": "py-estructura",
+      "ecosistema": "python",
+      "proyecto": "python_basico",
+      "solicitud": "¿cuál es la estructura del proyecto?",
+      "herramienta_esperada": "explore",
+      "debe_pedir_autorizacion": false,
+      "evidencia_esperada": ["src", "tests"],
+      "pasos_optimos": 1
+    },
+    {
+      "id": "py-localizar-funcion",
+      "ecosistema": "python",
+      "proyecto": "python_basico",
+      "solicitud": "localiza la función dividir",
+      "herramienta_esperada": "locate",
+      "debe_pedir_autorizacion": false,
+      "evidencia_esperada": ["calculadora"],
+      "pasos_optimos": 1
+    },
+    {
+      "id": "py-leer-archivo",
+      "ecosistema": "python",
+      "proyecto": "python_basico",
+      "solicitud": "lee el archivo calculadora.py",
+      "herramienta_esperada": "leer_archivo",
+      "debe_pedir_autorizacion": false,
+      "evidencia_esperada": ["calculadora"],
+      "pasos_optimos": 1
+    },
+    {
+      "id": "py-ejecutar-pruebas",
+      "ecosistema": "python",
+      "proyecto": "python_basico",
+      "solicitud": "ejecuta las pruebas del proyecto",
+      "herramienta_esperada": "",
+      "debe_pedir_autorizacion": true,
+      "evidencia_esperada": [],
+      "pasos_optimos": 1
+    },
+    {
+      "id": "node-estructura",
+      "ecosistema": "node",
+      "proyecto": "node_basico",
+      "solicitud": "¿cuál es la estructura del proyecto?",
+      "herramienta_esperada": "explore",
+      "debe_pedir_autorizacion": false,
+      "evidencia_esperada": ["src"],
+      "pasos_optimos": 1
+    },
+    {
+      "id": "go-estructura",
+      "ecosistema": "go",
+      "proyecto": "go_basico",
+      "solicitud": "¿cuál es la estructura del proyecto?",
+      "herramienta_esperada": "explore",
+      "debe_pedir_autorizacion": false,
+      "evidencia_esperada": ["inventario"],
+      "pasos_optimos": 1
+    }
+  ]
+}
