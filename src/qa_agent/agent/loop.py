@@ -16,6 +16,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from qa_agent.agent.grounding import _afirmaciones_no_ancladas
 from qa_agent.agent.intent_policy import (
     _es_analisis_exhaustivo,
     _es_analisis_global,
@@ -1564,7 +1565,7 @@ class Agent:
         # puede ser alta.
         if (
             confianza == Confianza.ALTA
-            and self._afirmaciones_no_ancladas(texto_final, observaciones)
+            and _afirmaciones_no_ancladas(texto_final, observaciones)
         ):
             confianza = Confianza.LIMITADA
 
@@ -1577,65 +1578,3 @@ class Agent:
             recomendaciones=self._recomendaciones_redactadas(respuesta_generada),
             razonamiento=list(observaciones),
         )
-
-    def _afirmaciones_no_ancladas(
-        self, texto: str, observaciones: list[Observacion]
-    ) -> bool:
-        """True si el texto afirma tokens sustantivos ausentes de la evidencia.
-
-        Determinista (SC-010): extrae números y palabras con mayúscula inicial
-        del texto de la respuesta y comprueba que aparezcan en los datos de
-        las observaciones reales. Si alguno no aparece, la afirmación no está
-        anclada (SC-017 / FR-019) y la confianza no puede ser alta.
-        """
-        import re
-
-        if not observaciones:
-            return bool(re.search(r"\b[A-ZÁ-Ú][a-zá-ú]+\b|\d+", texto))
-        evidencia = "\n".join(
-            str(getattr(o.resultado, "datos", o.resultado))
-            for o in observaciones
-            if getattr(getattr(o, "resultado", None), "estado", None)
-            == EstadoResultado.EXITO
-        )
-        # Tokens sustantivos de la respuesta: palabras individuales con
-        # mayúscula inicial y números. Se excluyen palabras comunes del
-        # castellano (verbos en 1ª persona, conectores) que no son
-        # afirmaciones de datos, y las palabras al INICIO de frase (no son
-        # afirmaciones: SC-017 exige anclar afirmaciones, no el texto).
-        palabras_comunes = {
-            "Encontré", "Encontre", "Observé", "Observe", "Analicé", "Analice",
-            "El", "La", "Los", "Las", "Un", "Una", "Y", "Pero", "Con", "En",
-            "De", "Que", "No", "Si", "Más", "Mas", "Sin", "Por", "Para",
-        }
-        for match in re.finditer(
-            r"\b([A-ZÁ-Ú][a-zá-ú]+)\b|\b(\d+(?:\.\d+)?)\b", texto
-        ):
-            token = match.group(1) or match.group(2)
-            if token in palabras_comunes:
-                continue
-            es_numero = match.group(2) is not None
-            if es_numero:
-                if token not in evidencia:
-                    return True
-                continue
-            if self._al_inicio_de_frase(texto, match.start()):
-                continue
-            if token not in evidencia:
-                return True
-        return False
-
-    @staticmethod
-    def _al_inicio_de_frase(texto: str, pos: int) -> bool:
-        """True si `pos` apunta al inicio de una oración (no es afirmación).
-
-        Determinista: el token está al inicio de frase si es el primer carácter
-        del texto o el último carácter no espacial previo es un signo de
-        puntuación que cierra una oración.
-        """
-        i = pos - 1
-        while i >= 0 and texto[i].isspace():
-            i -= 1
-        if i < 0:
-            return True
-        return texto[i] in ".!?;:"
