@@ -139,7 +139,7 @@ def validar_resultado_esquema(
     """
     try:
         return _esquema_cumple(datos, esquema_salida)
-    except (TypeError, ValueError, KeyError):
+    except (TypeError, ValueError, KeyError, AttributeError):
         return False
 
 
