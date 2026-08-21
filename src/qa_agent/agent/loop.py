@@ -16,6 +16,17 @@ import re
 from pathlib import Path
 from typing import Any
 
+from qa_agent.agent.intent_policy import (
+    _es_analisis_exhaustivo,
+    _es_analisis_global,
+    _es_intencion_pruebas,
+)
+from qa_agent.agent.layer_policy import (
+    _es_analisis_capa,
+    _es_archivo_codigo,
+    _extraer_capa_solicitada,
+    _resolver_capa_real,
+)
 from qa_agent.agent.reasoning import (
     EstadoDelAgente,
     Intencion,
@@ -65,132 +76,12 @@ _COMANDO_COBERTURA_PYTEST = "pytest --cov=src --cov-report=term-missing"
 _COMANDO_COBERTURA_DOTNET = 'dotnet test --collect:"XPlat Code Coverage"'
 _COMANDO_COBERTURA_MAVEN = "mvn test jacoco:report"
 
-# Análisis global del proyecto (FR-049): presupuesto ampliado de pasos y
-# frases que lo disparan. Para estas solicitudes el agente no depende solo del
-# plan del LLM: enriquece el plan de forma determinista para recorrer las
-# capas reales del proyecto (FR-024 / VI).
-# Cubre las variantes más comunes: "analiza/explica/describe la estructura",
-# "qué capas hay", "cómo está organizado", etc. (T120: el detector era sensible
-# a la frase exacta — "analiza la estructura del proyecto" no disparaba el
-# enriquecimiento y el plan del flash quedaba superficial).
+# Análisis global del proyecto (FR-049): presupuesto ampliado de pasos para
+# las intenciones de análisis exhaustivo. Las tablas de frases/regex que
+# detectan esas intenciones (análisis global, sugerencia de pruebas, capa
+# concreta) viven en `intent_policy.py` y `layer_policy.py` (I02): este módulo
+# solo orquesta el bucle e importa los detectores deterministas.
 _PRESUPUESTO_ANALISIS_GLOBAL = 18
-_FRASES_ANALISIS_GLOBAL = (
-    "analiza el proyecto",
-    "analiza el código",
-    "analiza el repositorio",
-    "analiza todo el proyecto",
-    "analiza este proyecto",
-    "analiza la estructura",
-    "analiza la estructura del proyecto",
-    "analiza la arquitectura",
-    "analiza la organización",
-    "analiza la organizacion",
-    "análisis completo",
-    "analisis completo",
-    "análisis de la estructura",
-    "analisis de la estructura",
-    "explora el proyecto",
-    "explora todo el proyecto",
-    "explora la estructura",
-    "explora la estructura del proyecto",
-    "estructura completa",
-    "estructura del proyecto",
-    "explica la estructura",
-    "explica la estructura del proyecto",
-    "describe el proyecto",
-    "describe la estructura",
-    "describe la arquitectura",
-    "qué capas hay",
-    "que capas hay",
-    "cuáles son las capas",
-    "cuales son las capas",
-    "las capas del proyecto",
-    "cómo está organizado",
-    "como esta organizado",
-    "cómo está organizado el proyecto",
-    "como esta organizado el proyecto",
-    "organización del proyecto",
-    "organizacion del proyecto",
-    "distribución por capas",
-    "distribucion por capas",
-    "revisa el proyecto",
-    "revisa todo el proyecto",
-    "dime la estructura",
-    "cuál es la estructura",
-    "cual es la estructura",
-    "arquitectura del proyecto",
-)
-
-# Intenciones de sugerencia de pruebas ("¿qué pruebas podemos aplicar?"): se
-# tratan como análisis exhaustivo (T121). Amplían el presupuesto de pasos,
-# garantizan la cobertura por capa y añaden `locate` de clases reales +
-# `generate_test_cases`, para que la respuesta no dependa solo de un plan
-# superficial del LLM.
-_FRASES_INTENCION_PRUEBAS = (
-    "qué tipo de pruebas",
-    "que tipo de pruebas",
-    "tipos de pruebas",
-    "qué pruebas podemos",
-    "que pruebas podemos",
-    "qué pruebas aplicar",
-    "que pruebas aplicar",
-    "qué pruebas recomiendas",
-    "que pruebas recomiendas",
-    "qué pruebas harías",
-    "que pruebas harías",
-    "qué pruebas hacer",
-    "que pruebas hacer",
-    "qué pruebas crear",
-    "que pruebas crear",
-    "qué pruebas sugerir",
-    "que pruebas sugerir",
-    "qué casos de prueba",
-    "que casos de prueba",
-    "casos de prueba para",
-    "casos de prueba al",
-    "cómo probar el proyecto",
-    "como probar el proyecto",
-    "cómo probar este proyecto",
-    "como probar este proyecto",
-    "cómo probar el código",
-    "como probar el codigo",
-    "estrategia de pruebas",
-    "qué cubrir con pruebas",
-    "que cubrir con pruebas",
-    "pruebas al proyecto",
-    "pruebas para el proyecto",
-    # Definición/redacción de pruebas y cobertura (T123): "procede a definir
-    # las pruebas unitarias y cobertura de la capa DAL", "define las pruebas
-    # unitarias en UnitTest.md", "el porcentaje de cobertura", etc. Sin estos
-    # términos, la intención de escritura de pruebas no disparaba el
-    # enriquecimiento determinista y el LLM planificaba rutas inventadas
-    # ("Datos"/"Negocio" en vez de la capa DAL real).
-    "pruebas unitarias",
-    "pruebas de unidad",
-    "define las pruebas",
-    "definir las pruebas",
-    "definas las pruebas",
-    "definir pruebas",
-    "redacta las pruebas",
-    "redactar las pruebas",
-    "escribe las pruebas",
-    "escribir las pruebas",
-    "documenta las pruebas",
-    "documentar las pruebas",
-    "pruebas y cobertura",
-    "porcentaje de cobertura",
-    "cobertura de pruebas",
-    "cobertura de código",
-    "cobertura de codigo",
-    "cobertura del proyecto",
-    "y cobertura",
-)
-_EXTENSIONES_CODIGO = frozenset(
-    {
-        "py", "cs", "js", "ts", "tsx", "jsx", "java", "go", "rs", "kt",
-        "swift", "rb", "php", "cpp", "c", "h", "hpp", "vue",
-    }
-)
 
 # Nota de cobertura añadida a la intención cuando un análisis exhaustivo (global
 # o de una capa/carpeta concreta) agota el presupuesto de pasos: la respuesta
@@ -202,61 +93,6 @@ _NOTAS_COBERTURA_GLOBAL = (
     "entrega TODO lo que alcanzaste a observar con su estado real; indica "
     "explícitamente qué capas o archivos quedaron sin analizar. NO sugieras al "
     "usuario volver a preguntar sin antes entregar todo lo analizado."
-)
-
-# Análisis de una capa/carpeta concreta ("explora todas las clases de la capa
-# DAL", "revisa los archivos de la carpeta BLL"): el plan del LLM suele quedarse
-# en un subconjunto de archivos (los modelos rápidos planifican por convención
-# de nombres, no por el árbol real), así que el agente enriquece el plan de
-# forma determinista con `explore` de la capa real + `leer_archivo` de los
-# archivos de código existentes hasta el presupuesto de pasos (FR-024 / VI),
-# igual que el análisis global. Verificación/regresión real: con ReservaHotel
-# el modelo siempre reportaba Bitacora/Cliente/TipoPago/Usuario y omitía
-# Conexion, Hotel, Pago, Mobiliario, ClienteTelefono, Reservacion,
-# TipoHabitacion, etc.
-# El patrón captura el RESTO tras la palabra clave ("capa/carpeta/directorio")
-# para poder saltar conectores/preposiciones (T124): "la capa de DAL",
-# "la carpeta del proyecto" → el nombre real viene después de "de/del".
-_PATRON_CAPA_O_CARPETA = re.compile(
-    r"\b(?:capa|carpeta|directorio)\b\s+(.+)$", re.IGNORECASE
-)
-# Conectores/preposiciones que no son nombres de directorio y se saltan al
-# extraer la capa solicitada.
-_CONECTORES_CAPA = frozenset(
-    {
-        "de", "del", "en", "el", "la", "los", "las", "un", "una", "y", "o",
-        "e", "u", "que", "para", "al", "con", "actual", "a",
-    }
-)
-# Palabras que indican que la solicitud pide analizar/explorar el contenido de
-# la capa (y no solo menciona la capa de paso).
-_VERBOS_ANALISIS_CAPA = (
-    "explora", "explorar", "explore", "explorando",
-    "analiza", "analizar", "analizando",
-    "revisa", "revisar", "revisando",
-    "resume", "resumir", "resumen",
-    "lista", "listar", "describe", "describir", "ver", "muestra",
-    "todas las clases", "todos los archivos",
-    "las clases de la capa", "los archivos de la capa",
-    "archivos de la carpeta", "clases en la capa", "archivos en la capa",
-    "estructura", "completa", "profundiza", "profundizar",
-    "existen", "hay", "qué hay", "que hay",
-    "dime las clases", "dame las clases",
-    # Definición/escritura de contenido de una capa (T123): "procede a definir
-    # las pruebas unitarias y cobertura que se van a realizar a la capa DAL",
-    # "definas en UnitTest.md ... de la capa de datos". Sin estos verbos, una
-    # intención de crear/editar contenido para una capa concreta no disparaba
-    # el enriquecimiento y el LLM exploraba rutas inventadas ("Datos"/"Negocio"
-    # en vez de la capa DAL real).
-    "define", "definir", "definas", "definiendo",
-    "redacta", "redactar", "redactando",
-    "escribe", "escribir", "escribiendo",
-    "documenta", "documentar", "documentando",
-    "procede", "proceder", "procediendo",
-    "realiza", "realizar", "realizando",
-    "cobertura", "porcentaje de cobertura",
-    "los casos de prueba", "casos de prueba para",
-    "se van a realizar",
 )
 
 # Herramientas que MODIFICAN el proyecto: requieren autorización y, cuando el
@@ -275,107 +111,6 @@ _HERRAMIENTAS_EVIDENCIA = (
     "analyze_test_results",
     "generate_test_cases",
 )
-
-
-def _es_analisis_global(texto: str) -> bool:
-    """True si la solicitud pide analizar/explorar TODO el proyecto.
-
-    Heurística determinista sobre el texto normalizado (sin LLM, VI / SC-010):
-    si es un análisis global, el agente amplía el presupuesto de pasos y
-    enriquece el plan por capa (FR-049).
-    """
-    normalizado = " ".join((texto or "").lower().split())
-    return any(frase in normalizado for frase in _FRASES_ANALISIS_GLOBAL)
-
-
-def _extraer_capa_solicitada(texto: str) -> str:
-    """Extrae el nombre de capa/carpeta concreto solicitado (p. ej. 'DAL' en
-    'las clases de la capa DAL' o 'BLL' en 'los archivos de la carpeta BLL').
-
-    Devuelve una cadena vacía si la solicitud no nombra una capa/carpeta
-    concreta (heurística determinista, sin LLM, VI / SC-010). El valor es el
-    token textual (en minúsculas); su existencia real se valida después con
-    `_resolver_capa_real` para no inventar rutas (FR-019).
-    """
-    if not texto:
-        return ""
-    normalizado = " ".join(texto.lower().split())
-    coincidencia = _PATRON_CAPA_O_CARPETA.search(normalizado)
-    if not coincidencia:
-        return ""
-    # Salta conectores/preposiciones y toma el primer token que parece un
-    # nombre de capa/carpeta (T124): "la capa de DAL" → "dal".
-    for token in coincidencia.group(1).split():
-        candidato = token.strip(".,;:()\"'¿?")
-        if candidato and candidato not in _CONECTORES_CAPA:
-            return candidato
-    return ""
-
-
-def _es_analisis_capa(texto: str) -> bool:
-    """True si la solicitud pide analizar/explorar UNA capa o carpeta concreta.
-
-    Heurística determinista sin LLM (VI / SC-010): amplía el presupuesto de
-    pasos y enriquece el plan con la exploración y lectura exhaustiva de esa
-    capa (FR-049), de modo que el resultado no dependa solo de un plan
-    superficial del LLM (T122 / FR-024).
-    """
-    if not _extraer_capa_solicitada(texto):
-        return False
-    normalizado = " ".join((texto or "").lower().split())
-    return any(verbo in normalizado for verbo in _VERBOS_ANALISIS_CAPA)
-
-
-def _resolver_capa_real(base: str, capa_solicitada: str) -> str | None:
-    """Nombre REAL (en disco) del directorio solicitado, o `None` si no existe.
-
-    Nunca inventa una capa (FR-019 / VI): busca coincidencia exacta o
-    case-insensitive sobre los directorios de primer nivel de `base` y
-    canoniza el nombre a como existe realmente (p. ej. 'dal' → 'DAL').
-    Admite subrutas (p. ej. 'DAL/Properties'). Ignora directorios ocultos.
-    """
-    raiz = Path(base)
-    if not raiz.is_dir():
-        return None
-    pedida = Path(capa_solicitada)
-    real = None
-    for hijo in raiz.iterdir():
-        if (
-            hijo.is_dir()
-            and not hijo.name.startswith(".")
-            and hijo.name.lower() == pedida.parts[0].lower()
-        ):
-            real = hijo.name
-            break
-    if real is None:
-        return None
-    if len(pedida.parts) <= 1:
-        return real
-    return str(Path(real, *pedida.parts[1:]))
-
-
-def _es_intencion_pruebas(texto: str) -> bool:
-    """True si la solicitud pide sugerir/decidir qué pruebas aplicar.
-
-    Heurística determinista sin LLM (VI / SC-010): dispara el presupuesto
-    ampliado y el enriquecimiento del plan (cobertura por capa + `locate` de
-    clases + `generate_test_cases`), de modo que la respuesta no dependa solo
-    de un plan superficial del LLM (T121 / FR-049).
-    """
-    normalizado = " ".join((texto or "").lower().split())
-    return any(frase in normalizado for frase in _FRASES_INTENCION_PRUEBAS)
-
-
-def _es_analisis_exhaustivo(texto: str) -> bool:
-    """True si la solicitud requiere cobertura amplia (análisis global del
-    proyecto o sugerencia de pruebas): amplía el presupuesto de pasos y
-    enriquece el plan por capa (FR-049 / SC-016)."""
-    return _es_analisis_global(texto) or _es_intencion_pruebas(texto)
-
-
-def _es_archivo_codigo(ruta_relativa: str) -> bool:
-    """True si la extensión del archivo es de código fuente."""
-    return ruta_relativa.rsplit(".", 1)[-1].lower() in _EXTENSIONES_CODIGO
 
 
 def _encontrar_marcador(ruta: str, patrones: tuple[str, ...]) -> bool:

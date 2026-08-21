@@ -18,6 +18,7 @@ ni se cambia la semántica de ningún regex (Constitution VI / X / XII).
 
 from __future__ import annotations
 
+from qa_agent.agent import intent_policy, layer_policy
 from qa_agent.agent.loop import (
     _es_analisis_capa,
     _es_analisis_exhaustivo,
@@ -129,5 +130,18 @@ def test_resolver_capa_real_case_insensitive_y_ausente(tmp_path):
 
 
 # -- Identidad tras el movimiento: mismas funciones, no reimplementaciones ----
-# Verificado en un segundo momento (tras la extracción) importando también
-# desde los módulos nuevos y comprobando identidad de objeto con `is`.
+# `loop.py` importa (no reimplementa) estos detectores desde los módulos
+# enfocados de I02: `is` prueba que son el mismo objeto función, no una copia
+# que pudiera divergir con el tiempo (movimiento puro, Constitution X / XII).
+
+
+def test_loop_reexporta_los_mismos_objetos_de_intent_policy():
+    assert _es_analisis_global is intent_policy._es_analisis_global
+    assert _es_intencion_pruebas is intent_policy._es_intencion_pruebas
+    assert _es_analisis_exhaustivo is intent_policy._es_analisis_exhaustivo
+
+
+def test_loop_reexporta_los_mismos_objetos_de_layer_policy():
+    assert _es_analisis_capa is layer_policy._es_analisis_capa
+    assert _extraer_capa_solicitada is layer_policy._extraer_capa_solicitada
+    assert _resolver_capa_real is layer_policy._resolver_capa_real
