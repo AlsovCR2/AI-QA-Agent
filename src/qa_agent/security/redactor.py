@@ -27,6 +27,16 @@ _PATRONES: list[re.Pattern[str]] = [
     re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}\b"),
     # Claves de acceso AWS: AKIA + 16 alfanuméricos en mayúscula
     re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
+    # JWT: tres segmentos base64url separados por puntos; el header JSON
+    # ("{...") codificado en base64 siempre empieza por "eyJ".
+    re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b"),
+    # Bloques de clave PRIVADA en formato PEM (RSA/EC/DSA/OpenSSH/genérica).
+    # Las claves PÚBLICAS ("PUBLIC KEY") no son secretas y no coinciden.
+    re.compile(
+        r"-----BEGIN (?:RSA |EC |DSA |OPENSSH |)PRIVATE KEY-----"
+        r"[\s\S]+?"
+        r"-----END (?:RSA |EC |DSA |OPENSSH |)PRIVATE KEY-----"
+    ),
 ]
 
 

@@ -167,6 +167,62 @@ def test_no_redacta_uuid_como_secreto():
     assert redactor.redactar(texto) == texto
 
 
+# -- I08: cobertura ampliada de secretos (grupo B: JWT / PEM) --------------
+
+
+def test_redacta_jwt_sin_prefijo_bearer():
+    """Un JWT que aparece solo (sin 'Bearer ' delante) también debe redactarse."""
+    redactor = Redactor()
+    secreto = (
+        "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"
+        ".eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4ifQ"
+        ".dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+    )
+    assert redactor.redactar(f"token JWT: {secreto}") == "token JWT: ***"
+
+
+def test_no_redacta_version_ni_dominio_similar_a_jwt():
+    """Una cadena con puntos (versión semver, dominio) no es un JWT."""
+    redactor = Redactor()
+    texto = "versión 1.2.3 disponible en app.staging.example.com"
+    assert redactor.redactar(texto) == texto
+
+
+def test_no_redacta_base64_no_jwt():
+    """Un blob base64 de un solo segmento (sin dos puntos ni prefijo eyJ) no es un JWT."""
+    redactor = Redactor()
+    texto = "adjunto: aGVsbG8gbXVuZG8gZXN0byBubyBlcyB1biBzZWNyZXRv"
+    assert redactor.redactar(texto) == texto
+
+
+def test_redacta_bloque_pem_clave_privada():
+    redactor = Redactor()
+    bloque = (
+        "-----BEGIN RSA PRIVATE KEY-----\n"
+        "MIIBOgIBAAJBAK...ejemplo...==\n"
+        "-----END RSA PRIVATE KEY-----"
+    )
+    assert redactor.redactar(f"contenido:\n{bloque}\nfin") == "contenido:\n***\nfin"
+
+
+def test_redacta_bloque_pem_clave_privada_generica():
+    redactor = Redactor()
+    bloque = (
+        "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBg...\n-----END PRIVATE KEY-----"
+    )
+    assert bloque not in redactor.redactar(bloque)
+
+
+def test_no_redacta_bloque_pem_clave_publica():
+    """Una clave PÚBLICA no es un secreto y no debe redactarse."""
+    redactor = Redactor()
+    bloque = (
+        "-----BEGIN PUBLIC KEY-----\nMFwwDQYJKoZIhvcNAQEBBQADSwAw...\n"
+        "-----END PUBLIC KEY-----"
+    )
+    assert redactor.redactar(bloque) == bloque
+
+
 # -- SC-008: secretos ausentes en respuesta, historial y logs --------------
 
 
