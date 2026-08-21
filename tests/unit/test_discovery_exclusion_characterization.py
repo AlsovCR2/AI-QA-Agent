@@ -38,8 +38,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from qa_agent.tools.allowlist import Allowlist
 from qa_agent.tools.explore import ExploreHerramienta
 from qa_agent.tools.generate_test_cases import GenerateTestCasesHerramienta

@@ -147,6 +147,17 @@ python -m coverage run -m pytest -q && python -m coverage report
 python -m pip_audit              → No known vulnerabilities found
 ```
 
+> **Note (2026-08-21, post-integration fix wave):** the `ruff check .` →
+> "All checks passed!" result above was accurate at the time this document
+> was written (Person 3's baseline, before later branches merged). After
+> Person 1's `loop.py` rewrite and Person 4's new characterization test file
+> merged in, `ruff check .` regressed to 6 findings (F401 unused-import
+> findings — see the final-review fix wave, I-1). This was fixed
+> post-integration on `fix/final-review` (re-export `# noqa: F401` markers
+> in `loop.py` plus removal of two genuinely dead imports); `ruff check .`
+> is green again as of that fix. See
+> `docs/improvements/all-persons-progress.md` for the fix-wave record.
+
 ## Decisions (ADR links)
 
 - `docs/adr/ADR-003-quality-tooling.md` — full per-tool evaluation, baseline

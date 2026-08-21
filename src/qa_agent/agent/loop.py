@@ -12,20 +12,31 @@ El bucle es determinista excepto las tres operaciones delegadas al `LLMBackend`
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 from typing import Any
 
 from qa_agent.agent.grounding import _afirmaciones_no_ancladas
+# `_es_analisis_global` y `_es_intencion_pruebas` no se usan dentro de este
+# módulo: se re-exportan a propósito desde aquí porque varios tests
+# (test_profundidad_analisis.py, test_intencion_pruebas.py,
+# test_intent_layer_policy_characterization.py) los importan como
+# `qa_agent.agent.loop._es_analisis_global` / `._es_intencion_pruebas` por
+# compatibilidad con la ubicación histórica de estos detectores (I02).
 from qa_agent.agent.intent_policy import (
     _es_analisis_exhaustivo,
-    _es_analisis_global,
-    _es_intencion_pruebas,
+    _es_analisis_global,  # noqa: F401 - re-exportado para tests, ver nota arriba
+    _es_intencion_pruebas,  # noqa: F401 - re-exportado para tests, ver nota arriba
 )
+# `_extraer_capa_solicitada` y `_resolver_capa_real` no se usan dentro de este
+# módulo: se re-exportan a propósito desde aquí porque varios tests
+# (test_profundidad_capa.py, test_intent_layer_policy_characterization.py) los
+# importan como `qa_agent.agent.loop._extraer_capa_solicitada` /
+# `._resolver_capa_real` por compatibilidad con la ubicación histórica de
+# estos detectores (I02).
 from qa_agent.agent.layer_policy import (
     _es_analisis_capa,
-    _extraer_capa_solicitada,
-    _resolver_capa_real,
+    _extraer_capa_solicitada,  # noqa: F401 - re-exportado para tests, ver nota arriba
+    _resolver_capa_real,  # noqa: F401 - re-exportado para tests, ver nota arriba
 )
 from qa_agent.agent import plan_enrichment as _plan_enrichment
 from qa_agent.agent.reasoning import (
