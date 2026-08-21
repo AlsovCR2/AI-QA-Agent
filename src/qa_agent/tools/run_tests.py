@@ -146,7 +146,20 @@ class RunTestsHerramienta(Herramienta):
         "properties": {
             "ruta": {"type": "string", "description": "Raíz del proyecto donde ejecutar las pruebas"},
             "conjunto_autorizado": {"type": "boolean", "description": "Indica si el conjunto de pruebas está autorizado"},
-            "comando_pruebas": {"type": "string", "description": "Comando autorizado y acotado (p. ej. 'pytest', 'pytest -v')"},
+            "comando_pruebas": {
+                "type": "string",
+                # El `enum` se deriva de la allowlist para que no puedan
+                # divergir. Enumerarlos aquí NO amplía el perímetro —la
+                # validación real sigue en `_comando_permitido`—, sino que le
+                # dice al modelo qué puede pedir. Sin esto proponía comandos
+                # como 'pytest tests/x.py' o 'pytest --cov=...', que se
+                # rechazan siempre y desperdician un paso del presupuesto.
+                "enum": sorted(_COMANDOS_PERMITIDOS),
+                "description": (
+                    "Comando EXACTO de la allowlist. No admite argumentos "
+                    "adicionales (rutas, -k, --cov): usa el comando tal cual."
+                ),
+            },
         },
         "required": ["ruta", "conjunto_autorizado", "comando_pruebas"],
     }

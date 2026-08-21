@@ -162,7 +162,13 @@ class AnalyzeCoverageHerramienta(Herramienta):
             "ruta": {"type": "string", "description": "Raíz del proyecto"},
             "comando_cobertura": {
                 "type": "string",
-                "description": "Comando autorizado y acotado (p. ej. 'pytest --cov=src --cov-report=term')",
+                # Derivado de la allowlist: ver la nota equivalente en
+                # `run_tests.py`.
+                "enum": sorted(_COMANDOS_COBERTURA_PERMITIDOS),
+                "description": (
+                    "Comando EXACTO de la allowlist. No admite argumentos "
+                    "adicionales ni rutas: usa el comando tal cual."
+                ),
             },
         },
         "required": ["ruta", "comando_cobertura"],
