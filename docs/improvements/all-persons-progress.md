@@ -17,9 +17,9 @@ No existing `.github/workflows`; Person 3 creates the first one.
 | 1 | I02 | TECHNICAL DEBT | NOT STARTED | - | none | pending |
 | 2 | I03 | TECHNICAL DEBT | NOT STARTED | - | none | pending |
 | 2 | I10 | POST-MVP (design only) | NOT STARTED | - | none | pending |
-| 3 | I04 | TECHNICAL DEBT | NOT STARTED | - | none | pending |
-| 3 | I05 | TECHNICAL DEBT | NOT STARTED | - | I04 | pending |
-| 3 | I06 | POST-MVP (design only) | NOT STARTED | - | none | pending |
+| 3 | I04 | TECHNICAL DEBT | DONE | 354 passed | none | pending |
+| 3 | I05 | TECHNICAL DEBT | DONE (scoped; ruff format + mypy/pyright deferred, documented) | 354 passed | I04 | pending |
+| 3 | I06 | POST-MVP (design only) | DONE (design only) | 354 passed (no code touched) | none | pending |
 | 4 | I07 | TECHNICAL DEBT | NOT STARTED | - | none | pending |
 | 4 | I11 | POST-MVP (design only) | NOT STARTED | - | I07 | pending |
 | 4 | I13 | FUTURE FEATURE (design only) | NOT STARTED | - | I11 | pending |
@@ -39,3 +39,11 @@ No existing `.github/workflows`; Person 3 creates the first one.
 ## Log
 
 - Coordinator baseline verified; branch confirmed `abraham-full-tasks-branch`, clean tree, HEAD `a69d315`.
+- Person 3 (`work/person-3` from `561e084`): I04 CI workflow
+  (`.github/workflows/ci.yml`), I05 quality tooling adopted (Ruff lint scoped
+  rule set, coverage.py informational, pip-audit gated) per
+  `docs/adr/ADR-003-quality-tooling.md`, I06 design
+  (`docs/proposals/I06-runner-metadata.md`, no contract/code change). No
+  file under `src/` or `tests/` modified; `agent/loop.py`/`agent/router.py`
+  untouched. `pyproject.toml` and `.gitignore` updated. 354 passed
+  throughout; `pip check` clean. Details: `docs/improvements/person-3-result.md`.
