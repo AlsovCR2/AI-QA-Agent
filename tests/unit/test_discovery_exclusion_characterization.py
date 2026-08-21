@@ -113,15 +113,19 @@ def test_explore_excluye_ruido_comun_antes_de_i07(tmp_path):
     assert "src" in nombres
 
 
-def test_explore_no_excluia_ruido_ampliado_antes_de_i07(tmp_path):
-    """Caracteriza la inconsistencia: antes de I07, `explore` SÍ mostraba
-    estos directorios (a diferencia de `generate_test_cases`)."""
+def test_explore_excluye_ruido_ampliado_post_ruling(tmp_path):
+    """Post-I07 (ruling 1): antes de centralizar, `explore` SÍ mostraba
+    estos directorios (a diferencia de `generate_test_cases`) — ver
+    `test_discovery_exclusion_characterization.py`, commit anterior, y
+    `docs/improvements/person-4-result.md`. Tras la unión, `explore`
+    también los excluye."""
     proyecto = _crear_arbol_con_ruido(tmp_path)
     herramienta = ExploreHerramienta([str(proyecto)])
     resultado = herramienta.ejecutar({"ruta": str(proyecto), "profundidad_max": 2})
     nombres = {e["nombre"] for e in resultado.datos["elementos"]}
     for ruido in RUIDO_DIRNAME_SOLO_GENERATE_ANTES:
-        assert ruido in nombres
+        assert ruido not in nombres
+    assert "src" in nombres
 
 
 def test_explore_sigue_mostrando_ruido_solo_patron_allowlist(tmp_path):
@@ -156,10 +160,11 @@ def test_locate_excluye_ruido_comun_antes_de_i07(tmp_path):
         assert not _bajo_directorio(rutas, ruido)
 
 
-def test_locate_no_excluia_venv_idea_vscode_antes_de_i07(tmp_path):
-    """Caracteriza la inconsistencia: `venv` (sin punto), `.idea` y
-    `.vscode` no estaban cubiertos ni por el set de nombres de `explore` ni
-    por los patrones por defecto de `Allowlist`."""
+def test_locate_excluye_venv_idea_vscode_post_ruling(tmp_path):
+    """Post-I07 (ruling 1): antes de centralizar, `venv` (sin punto),
+    `.idea` y `.vscode` no estaban cubiertos ni por el set de nombres de
+    `explore` ni por los patrones por defecto de `Allowlist`. Tras la
+    unión, `locate` también los excluye."""
     proyecto = _crear_arbol_con_ruido(tmp_path)
     herramienta = LocateHerramienta([str(proyecto)])
     resultado = herramienta.ejecutar(
@@ -167,7 +172,7 @@ def test_locate_no_excluia_venv_idea_vscode_antes_de_i07(tmp_path):
     )
     rutas = {c["ruta_relativa"] for c in resultado.datos["coincidencias"]}
     for ruido in ("venv", ".idea", ".vscode"):
-        assert _bajo_directorio(rutas, ruido)
+        assert not _bajo_directorio(rutas, ruido)
 
 
 # --------------------------------------------------------------------------
@@ -186,7 +191,8 @@ def test_search_excluye_ruido_comun_antes_de_i07(tmp_path):
         assert not _bajo_directorio(rutas, ruido)
 
 
-def test_search_no_excluia_venv_idea_vscode_antes_de_i07(tmp_path):
+def test_search_excluye_venv_idea_vscode_post_ruling(tmp_path):
+    """Post-I07 (ruling 1): ver `test_locate_excluye_venv_idea_vscode_post_ruling`."""
     proyecto = _crear_arbol_con_ruido(tmp_path)
     herramienta = SearchHerramienta([str(proyecto)])
     resultado = herramienta.ejecutar(
@@ -194,7 +200,7 @@ def test_search_no_excluia_venv_idea_vscode_antes_de_i07(tmp_path):
     )
     rutas = {o["ruta_relativa"] for o in resultado.datos["ocurrencias"]}
     for ruido in ("venv", ".idea", ".vscode"):
-        assert _bajo_directorio(rutas, ruido)
+        assert not _bajo_directorio(rutas, ruido)
 
 
 # --------------------------------------------------------------------------
@@ -233,11 +239,15 @@ def test_allowlist_excluye_patrones_propios_antes_de_i07(tmp_path):
     assert allowlist.contiene(proyecto / "src" / "app.py") is True
 
 
-def test_allowlist_no_excluia_bin_obj_packages_antes_de_i07(tmp_path):
-    """Caracteriza la inconsistencia (parte b): antes de I07, `Allowlist`
-    consideraba estas rutas "autorizadas" pese a que el recorrido de árbol
-    de `explore`/`generate_test_cases` ya las podaba por nombre."""
+def test_allowlist_excluye_bin_obj_packages_post_ruling(tmp_path):
+    """Post-I07 (ruling 2): antes de centralizar, `Allowlist` consideraba
+    estas rutas "autorizadas" pese a que el recorrido de árbol de
+    `explore`/`generate_test_cases` ya las podaba por nombre — una laguna
+    real de mínimo privilegio (Constitución IV / FR-025), porque
+    `Allowlist.contiene()` puede consultarse directamente con cualquier
+    ruta, sin pasar por esa poda. Tras la unión, `Allowlist` también las
+    excluye."""
     proyecto = _crear_arbol_con_ruido(tmp_path)
     allowlist = Allowlist([proyecto])
     for ruido in _ALLOWLIST_FUGA_ANTES:
-        assert allowlist.contiene(proyecto / ruido / "ruido.py") is True
+        assert allowlist.contiene(proyecto / ruido / "ruido.py") is False

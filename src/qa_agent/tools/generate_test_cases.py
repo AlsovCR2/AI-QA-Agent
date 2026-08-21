@@ -26,6 +26,9 @@ from qa_agent.tools.base import (
 )
 from qa_agent.llm.backend import LLMBackend
 from qa_agent.security.redactor import Redactor
+from qa_agent.tools.exclusion_policy import (
+    NOMBRES_DIRECTORIO_EXCLUIDOS as _DIRECTORIOS_IGNORADOS,
+)
 
 # Extensiones de código fuente reconocidas, mapeadas a la etiqueta de lenguaje
 # usada en los bloques de código del prompt del LLM. `generate_test_cases`
@@ -52,10 +55,8 @@ _EXTENSIONES_CODIGO: dict[str, str] = {
 }
 
 # Directorios que nunca son código fuente real (VCS, build, dependencias).
-_DIRECTORIOS_IGNORADOS = frozenset({
-    ".git", ".vs", ".idea", ".vscode", "__pycache__", ".venv", "venv",
-    "node_modules", "bin", "obj", "packages",
-})
+# Centralizado en `exclusion_policy.py` (I07); ver ese módulo para el
+# inventario de duplicados y las decisiones (rulings) tomadas al unificar.
 
 
 class GenerateTestCasesHerramienta(Herramienta):
