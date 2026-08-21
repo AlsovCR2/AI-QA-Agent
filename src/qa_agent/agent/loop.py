@@ -34,6 +34,10 @@ from qa_agent.agent.reasoning import (
     PasoDePlan,
     Plan,
 )
+from qa_agent.agent.runner_detection import (
+    _detectar_comando_cobertura,
+    _detectar_comando_pruebas,
+)
 from qa_agent.agent.response import (
     Confianza,
     EstadoAccion,
@@ -58,23 +62,6 @@ from qa_agent.tools.base import (
     validar_resultado_esquema,
 )
 
-
-# Comandos de prueba/cobertura por tipo de proyecto (T073).
-# El runner se detecta por archivos de marcador del proyecto destino (sin LLM,
-# VI / SC-010): .NET → dotnet test, Maven → mvn test, Gradle → gradle test,
-# por defecto pytest. Todos dentro de las allowlists de `run_tests`/`analyze_coverage`.
-_MARCADORES_DOTNET = ("*.csproj", "*.sln", "*.fsproj", "*.vbproj")
-_MARCADORES_MAVEN = ("pom.xml",)
-_MARCADORES_GRADLE = ("build.gradle", "settings.gradle", "build.gradle.kts")
-
-_COMANDO_PRUEBAS_PYTEST = "python -m pytest"
-_COMANDO_PRUEBAS_DOTNET = "dotnet test"
-_COMANDO_PRUEBAS_MAVEN = "mvn test"
-_COMANDO_PRUEBAS_GRADLE = "gradle test"
-
-_COMANDO_COBERTURA_PYTEST = "pytest --cov=src --cov-report=term-missing"
-_COMANDO_COBERTURA_DOTNET = 'dotnet test --collect:"XPlat Code Coverage"'
-_COMANDO_COBERTURA_MAVEN = "mvn test jacoco:report"
 
 # Análisis global del proyecto (FR-049): presupuesto ampliado de pasos para
 # las intenciones de análisis exhaustivo. Las tablas de frases/regex que
@@ -111,34 +98,6 @@ _HERRAMIENTAS_EVIDENCIA = (
     "analyze_test_results",
     "generate_test_cases",
 )
-
-
-def _encontrar_marcador(ruta: str, patrones: tuple[str, ...]) -> bool:
-    """True si existe algún archivo de marcador dentro de `ruta` (recursivo)."""
-    base = Path(ruta)
-    if not base.exists():
-        return False
-    return any(next(base.rglob(patron), None) is not None for patron in patrones)
-
-
-def _detectar_comando_pruebas(ruta: str) -> str:
-    """Elige el comando de pruebas según el tipo de proyecto (T073)."""
-    if _encontrar_marcador(ruta, _MARCADORES_DOTNET):
-        return _COMANDO_PRUEBAS_DOTNET
-    if _encontrar_marcador(ruta, _MARCADORES_MAVEN):
-        return _COMANDO_PRUEBAS_MAVEN
-    if _encontrar_marcador(ruta, _MARCADORES_GRADLE):
-        return _COMANDO_PRUEBAS_GRADLE
-    return _COMANDO_PRUEBAS_PYTEST
-
-
-def _detectar_comando_cobertura(ruta: str) -> str:
-    """Elige el comando de cobertura según el tipo de proyecto (T073)."""
-    if _encontrar_marcador(ruta, _MARCADORES_DOTNET):
-        return _COMANDO_COBERTURA_DOTNET
-    if _encontrar_marcador(ruta, _MARCADORES_MAVEN):
-        return _COMANDO_COBERTURA_MAVEN
-    return _COMANDO_COBERTURA_PYTEST
 
 
 class Agent:
