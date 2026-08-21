@@ -13,8 +13,8 @@ No existing `.github/workflows`; Person 3 creates the first one.
 
 | Person | Item | Classification | Status | Tests | Dependency | Integration |
 |---|---|---|---|---|---|---|
-| 1 | I01 | TECHNICAL DEBT | NOT STARTED | - | I02 first | pending |
-| 1 | I02 | TECHNICAL DEBT | NOT STARTED | - | none | pending |
+| 1 | I01 | TECHNICAL DEBT | DONE (scope per ADR-001) | 371 passed | I02 first | ready |
+| 1 | I02 | TECHNICAL DEBT | DONE | 371 passed | none | ready |
 | 2 | I03 | TECHNICAL DEBT | NOT STARTED | - | none | pending |
 | 2 | I10 | POST-MVP (design only) | NOT STARTED | - | none | pending |
 | 3 | I04 | TECHNICAL DEBT | NOT STARTED | - | none | pending |
@@ -39,3 +39,13 @@ No existing `.github/workflows`; Person 3 creates the first one.
 ## Log
 
 - Coordinator baseline verified; branch confirmed `abraham-full-tasks-branch`, clean tree, HEAD `a69d315`.
+- Person 1 (`work/person-1`, base `561e084`): I02 done first (intent_policy.py +
+  layer_policy.py extracted from loop.py, pure move, characterization tests
+  added before the move). I01 done for the scope ADR-001 defines as
+  complete: runner_detection.py, grounding.py, plan_enrichment.py also
+  extracted (one commit each); authorization/execution boundary + filesystem
+  rails deliberately left in loop.py (security-sensitive, see ADR-001
+  "Stopping point"). loop.py: 1947 → 1358 lines. router.py: unchanged
+  (already a focused module). Full suite: 354 → 371 passed, `pip check`
+  clean. See `docs/adr/ADR-001-loop-modularization.md` and
+  `docs/improvements/person-1-result.md`.
