@@ -22,6 +22,36 @@ _PATRONES: list[re.Pattern[str]] = [
     re.compile(r"\bapi[_-]?key\s*=\s*['\"]?[^\s'\"&]+['\"]?", re.IGNORECASE),
     # Claves tipo ASS de Anthropic y genéricas "ass?:[a-z0-9]{8,}"
     re.compile(r"\bass?:[a-z0-9]{8,}\b", re.IGNORECASE),
+    # Tokens de GitHub: ghp_/gho_/ghs_ (clásicos) y github_pat_ (fine-grained)
+    re.compile(r"\b(?:ghp|gho|ghs)_[A-Za-z0-9]{36,}\b"),
+    re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}\b"),
+    # Claves de acceso AWS: AKIA + 16 alfanuméricos en mayúscula
+    re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
+    # JWT: tres segmentos base64url separados por puntos; el header JSON
+    # ("{...") codificado en base64 siempre empieza por "eyJ".
+    re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b"),
+    # Bloques de clave PRIVADA en formato PEM (RSA/EC/DSA/OpenSSH/genérica).
+    # Las claves PÚBLICAS ("PUBLIC KEY") no son secretas y no coinciden.
+    re.compile(
+        r"-----BEGIN (?:RSA |EC |DSA |OPENSSH |)PRIVATE KEY-----"
+        r"[\s\S]+?"
+        r"-----END (?:RSA |EC |DSA |OPENSSH |)PRIVATE KEY-----"
+    ),
+    # Tokens npm/registro: npm_ + 36 alfanuméricos
+    re.compile(r"\bnpm_[A-Za-z0-9]{36}\b"),
+    # Credenciales embebidas en cadenas de conexión: esquema://usuario:contraseña@
+    # Solo se sustituye "usuario:contraseña" (lookbehind "://", lookahead "@";
+    # el propio "@" no forma parte de la coincidencia y se conserva).
+    re.compile(r"(?<=://)[^\s:@/]{1,100}:[^\s@/]{1,200}(?=@)"),
+    # Asignaciones genéricas password=/secret=/token= (clave exacta, no
+    # identificadores compuestos como "reset_token"). El lookahead negativo
+    # evita volver a consumir un valor ya redactado por un patrón anterior
+    # (idempotencia dentro de la misma pasada, p. ej. "token=***").
+    re.compile(
+        r"\b(?:password|secret|token)\s*=\s*(?!\*\*\*(?:[\s'\"]|$))"
+        r"['\"]?[^\s'\"&]+['\"]?",
+        re.IGNORECASE,
+    ),
 ]
 
 

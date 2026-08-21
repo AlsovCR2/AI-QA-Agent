@@ -107,6 +107,201 @@ def test_redacta_en_tuple_manteniendo_tipo():
     assert salida == ("***", "limpio")
 
 
+# -- I08: cobertura ampliada de secretos (grupo A: GitHub / AWS) -----------
+
+
+def test_redacta_token_github_ghp():
+    redactor = Redactor()
+    secreto = "ghp_" + "a" * 36
+    assert redactor.redactar(f"usa {secreto} en el header") == "usa *** en el header"
+
+
+def test_redacta_token_github_gho():
+    redactor = Redactor()
+    secreto = "gho_" + "B1c2D3e4F5g6H7i8J9k0" + "l" * 16
+    assert secreto not in redactor.redactar(f"token: {secreto}")
+
+
+def test_redacta_token_github_ghs():
+    redactor = Redactor()
+    secreto = "ghs_" + "0" * 36
+    assert secreto not in redactor.redactar(f"token: {secreto}")
+
+
+def test_redacta_token_github_pat_fine_grained():
+    redactor = Redactor()
+    secreto = "github_pat_" + "a1B2c3" * 5
+    assert secreto not in redactor.redactar(f"token: {secreto}")
+
+
+def test_no_redacta_hash_git_similar_a_token_github():
+    """Un hash de commit git (hex de 40 chars) no empieza con ghp_/gho_/ghs_/github_pat_."""
+    redactor = Redactor()
+    texto = "commit a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"
+    assert redactor.redactar(texto) == texto
+
+
+def test_no_redacta_prefijo_github_sin_longitud_suficiente():
+    """'ghp_' mencionado en prosa sin los 36+ caracteres no es un token real."""
+    redactor = Redactor()
+    texto = "los tokens con prefijo ghp_ identifican credenciales clásicas"
+    assert redactor.redactar(texto) == texto
+
+
+def test_redacta_clave_acceso_aws():
+    redactor = Redactor()
+    secreto = "AKIAIOSFODNN7EXAMPLE"
+    assert redactor.redactar(f"clave: {secreto}") == "clave: ***"
+
+
+def test_no_redacta_id_similar_a_clave_aws():
+    """Un identificador de 20 chars mayúsculas que no empieza con AKIA no es una clave AWS."""
+    redactor = Redactor()
+    texto = "referencia: ORDR20230101ABCDEFGH"
+    assert redactor.redactar(texto) == texto
+
+
+def test_no_redacta_uuid_como_secreto():
+    redactor = Redactor()
+    texto = "id: 550e8400-e29b-41d4-a716-446655440000"
+    assert redactor.redactar(texto) == texto
+
+
+# -- I08: cobertura ampliada de secretos (grupo B: JWT / PEM) --------------
+
+
+def test_redacta_jwt_sin_prefijo_bearer():
+    """Un JWT que aparece solo (sin 'Bearer ' delante) también debe redactarse."""
+    redactor = Redactor()
+    secreto = (
+        "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"
+        ".eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4ifQ"
+        ".dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+    )
+    assert redactor.redactar(f"token JWT: {secreto}") == "token JWT: ***"
+
+
+def test_no_redacta_version_ni_dominio_similar_a_jwt():
+    """Una cadena con puntos (versión semver, dominio) no es un JWT."""
+    redactor = Redactor()
+    texto = "versión 1.2.3 disponible en app.staging.example.com"
+    assert redactor.redactar(texto) == texto
+
+
+def test_no_redacta_base64_no_jwt():
+    """Un blob base64 de un solo segmento (sin dos puntos ni prefijo eyJ) no es un JWT."""
+    redactor = Redactor()
+    texto = "adjunto: aGVsbG8gbXVuZG8gZXN0byBubyBlcyB1biBzZWNyZXRv"
+    assert redactor.redactar(texto) == texto
+
+
+def test_redacta_bloque_pem_clave_privada():
+    redactor = Redactor()
+    bloque = (
+        "-----BEGIN RSA PRIVATE KEY-----\n"
+        "MIIBOgIBAAJBAK...ejemplo...==\n"
+        "-----END RSA PRIVATE KEY-----"
+    )
+    assert redactor.redactar(f"contenido:\n{bloque}\nfin") == "contenido:\n***\nfin"
+
+
+def test_redacta_bloque_pem_clave_privada_generica():
+    redactor = Redactor()
+    bloque = (
+        "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBg...\n-----END PRIVATE KEY-----"
+    )
+    assert bloque not in redactor.redactar(bloque)
+
+
+def test_no_redacta_bloque_pem_clave_publica():
+    """Una clave PÚBLICA no es un secreto y no debe redactarse."""
+    redactor = Redactor()
+    bloque = (
+        "-----BEGIN PUBLIC KEY-----\nMFwwDQYJKoZIhvcNAQEBBQADSwAw...\n"
+        "-----END PUBLIC KEY-----"
+    )
+    assert redactor.redactar(bloque) == bloque
+
+
+# -- I08: cobertura ampliada de secretos (grupo C: npm / conexión / genérico) --
+
+
+def test_redacta_token_npm():
+    redactor = Redactor()
+    secreto = "npm_" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8"
+    assert redactor.redactar(f"registry token: {secreto}") == "registry token: ***"
+
+
+def test_no_redacta_mencion_npm_sin_token():
+    """Mencionar 'npm' en prosa (sin token de 36+ chars) no debe redactarse."""
+    redactor = Redactor()
+    texto = "ejecuta npm install y luego npm run build"
+    assert redactor.redactar(texto) == texto
+
+
+def test_no_redacta_token_npm_demasiado_corto():
+    """Un valor con prefijo npm_ pero por debajo del largo real no es un token válido."""
+    redactor = Redactor()
+    texto = "variable npm_short123 usada en pruebas"
+    assert redactor.redactar(texto) == texto
+
+
+def test_redacta_credenciales_en_cadena_de_conexion():
+    redactor = Redactor()
+    texto = "DATABASE_URL=postgres://admin:contraseñaSecreta1@db.internal:5432/prod"
+    assert "contraseñaSecreta1" not in redactor.redactar(texto)
+    assert "postgres://***@db.internal:5432/prod" in redactor.redactar(texto)
+
+
+def test_no_redacta_url_sin_credenciales():
+    """Una URL normal, sin usuario:contraseña embebidos, no se toca."""
+    redactor = Redactor()
+    texto = "consulta la documentación en https://example.com/docs?ref=readme"
+    assert redactor.redactar(texto) == texto
+
+
+def test_no_redacta_hora_y_correo_similar_a_credenciales():
+    """Una hora (10:30) y un correo (usuario@dominio) sin 'esquema://' no coinciden."""
+    redactor = Redactor()
+    texto = "la reunión es a las 10:30, escribe a soporte@example.com"
+    assert redactor.redactar(texto) == texto
+
+
+def test_redacta_asignacion_password():
+    redactor = Redactor()
+    assert redactor.redactar("password=MiClaveSuperSecreta1") == "***"
+
+
+def test_redacta_asignacion_secret():
+    redactor = Redactor()
+    assert redactor.redactar("secret=valorConfidencial99") == "***"
+
+
+def test_redacta_asignacion_token_generico():
+    redactor = Redactor()
+    assert redactor.redactar("token=abcdef123456") == "***"
+
+
+def test_no_redacta_identificador_compuesto_con_token():
+    """Un identificador compuesto (reset_token) no es la clave exacta 'token'."""
+    redactor = Redactor()
+    texto = "reset_token = generar_valor()"
+    assert redactor.redactar(texto) == texto
+
+
+def test_no_redacta_mencion_de_password_sin_asignacion():
+    """Mencionar 'password' en prosa, sin '=', no debe redactarse."""
+    redactor = Redactor()
+    texto = "recuerda actualizar tu password antes de iniciar sesión"
+    assert redactor.redactar(texto) == texto
+
+
+def test_no_redacta_hash_hex_generico_como_secreto_generico():
+    redactor = Redactor()
+    texto = "checksum: 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+    assert redactor.redactar(texto) == texto
+
+
 # -- SC-008: secretos ausentes en respuesta, historial y logs --------------
 
 
