@@ -9,3 +9,4 @@ dist/
 .coverage.*
 htmlcov/
 .ruff_cache/
+.qa_sessions/
