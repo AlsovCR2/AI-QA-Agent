@@ -24,10 +24,10 @@ from qa_agent.agent.intent_policy import (
 )
 from qa_agent.agent.layer_policy import (
     _es_analisis_capa,
-    _es_archivo_codigo,
     _extraer_capa_solicitada,
     _resolver_capa_real,
 )
+from qa_agent.agent import plan_enrichment as _plan_enrichment
 from qa_agent.agent.reasoning import (
     EstadoDelAgente,
     Intencion,
@@ -186,282 +186,60 @@ class Agent:
         exhaustivo (análisis global, sugerencia de pruebas o análisis de una
         capa/carpeta concreta): el plan enriquecido por capa necesita más pasos
         que el mínimo."""
-        if _es_analisis_exhaustivo(texto) or _es_analisis_capa(texto):
-            return max(self._pasos_max, _PRESUPUESTO_ANALISIS_GLOBAL)
-        return self._pasos_max
+        return _plan_enrichment.presupuesto_pasos(
+            texto, self._pasos_max, _PRESUPUESTO_ANALISIS_GLOBAL
+        )
 
     def _enriquecer_plan_analisis_global(
         self, plan: Plan | None, texto: str
     ) -> Plan | None:
-        """Añade pasos deterministas para garantizar cobertura por capa.
-
-        Para una intención de análisis global, detecta con `explore` las capas
-        (directorios) de primer nivel REALES de la raíz y añade al plan: un
-        `explore` por capa (el listado de todo el árbol se trunca en el
-        contexto del LLM) y una lectura (`leer_archivo`) de los archivos de
-        código principales de cada capa. El LLM planifica, pero la cobertura
-        mínima la garantiza el agente de forma determinista (FR-024 / VI).
-        """
-        if plan is None or not _es_analisis_exhaustivo(texto):
-            return plan
-        explore = self._herramientas.get("explore")
-        leer = self._herramientas.get("leer_archivo")
-        if explore is None or leer is None:
-            return plan
-
-        try:
-            resultado_raiz = explore.ejecutar(
-                {"ruta": self._ruta_base(), "profundidad_max": 1}
-            )
-        except Exception:  # noqa: BLE001 - sin enriquecer ante errores
-            return plan
-        if resultado_raiz.estado != EstadoResultado.EXITO:
-            return plan
-        capas = sorted(
-            {
-                e.get("ruta_relativa", "")
-                for e in (resultado_raiz.datos.get("elementos") or [])
-                if e.get("tipo") == "directorio" and e.get("ruta_relativa")
-            }
+        """Añade pasos deterministas para garantizar cobertura por capa
+        (delegado a `plan_enrichment.enriquecer_plan_analisis_global`)."""
+        return _plan_enrichment.enriquecer_plan_analisis_global(
+            plan, texto, self._herramientas, self._ruta_base()
         )
-        # Capas de primer nivel (ignora directorios ocultos), acotadas para no
-        # desbordar el presupuesto de pasos del análisis.
-        capas = [c for c in capas if not c.startswith(".")][:4]
-        if not capas:
-            return plan
-
-        pasos_extra: list[PasoDePlan] = []
-        orden = max((p.orden for p in plan.pasos), default=len(plan.pasos))
-        for capa in capas:
-            if not self._plan_ya_explora_capa(plan, capa):
-                orden += 1
-                pasos_extra.append(
-                    PasoDePlan(
-                        orden=orden,
-                        razon=(
-                            f"explorar la capa real '{capa}' detectada en la "
-                            "raíz"
-                        ),
-                        herramienta="explore",
-                        parametros={
-                            "ruta": str(Path(self._ruta_base()) / capa),
-                            "profundidad_max": 3,
-                        },
-                        criterio_salida="estructura completa de la capa",
-                    )
-                )
-            for archivo in self._archivos_codigo_de_capa(explore, capa):
-                if self._plan_ya_lee_archivo(plan, archivo):
-                    continue
-                orden += 1
-                pasos_extra.append(
-                    PasoDePlan(
-                        orden=orden,
-                        razon=(
-                            f"leer el código real de '{archivo}' de la capa "
-                            f"'{capa}'"
-                        ),
-                        herramienta="leer_archivo",
-                        parametros={
-                            "ruta": self._ruta_base(),
-                            "archivo_relativo": archivo,
-                        },
-                        criterio_salida="contenido real del archivo",
-                    )
-                )
-        if not pasos_extra:
-            return plan
-        plan.pasos.extend(pasos_extra)
-        plan.pendientes.extend(pasos_extra)
-        return plan
 
     def _enriquecer_plan_pruebas(
         self, plan: Plan | None, texto: str
     ) -> Plan | None:
-        """Añade pasos deterministas para una intención de sugerencia de
-        pruebas ("¿qué pruebas podemos aplicar?"): localiza las clases reales
-        (`locate`) y genera casos de prueba sugeridos (`generate_test_cases`).
-
-        La cobertura por capa ya la garantiza `_enriquecer_plan_analisis_global`
-        (se invoca antes y dispara también para estas intenciones). Solo se
-        añaden pasos de herramientas presentes en el catálogo y si el plan del
-        LLM no los prevé ya (FR-024 / VI).
-        """
-        if plan is None or not _es_intencion_pruebas(texto):
-            return plan
-        pasos_extra: list[PasoDePlan] = []
-        orden = max((p.orden for p in plan.pasos), default=len(plan.pasos))
-
-        locate = self._herramientas.get("locate")
-        if locate is not None and not any(
-            p.herramienta == "locate" for p in plan.pasos
-        ):
-            orden += 1
-            pasos_extra.append(
-                PasoDePlan(
-                    orden=orden,
-                    razon=(
-                        "localizar las clases reales del proyecto (evidencia "
-                        "de qué unidades cubrir con pruebas)"
-                    ),
-                    herramienta="locate",
-                    parametros={
-                        "ruta": self._ruta_base(),
-                        "patron": r"\bclass\s+\w+",
-                        "tipo": "clase",
-                    },
-                    criterio_salida="clases reales localizadas",
-                )
-            )
-
-        generar = self._herramientas.get("generate_test_cases")
-        if generar is not None and not any(
-            p.herramienta == "generate_test_cases" for p in plan.pasos
-        ):
-            objetivo, cripticidad = extraer_objetivo_cripticidad(texto)
-            orden += 1
-            pasos_extra.append(
-                PasoDePlan(
-                    orden=orden,
-                    razon="generar casos de prueba sugeridos para la solicitud",
-                    herramienta="generate_test_cases",
-                    parametros={
-                        "ruta": self._ruta_base(),
-                        "objetivo": objetivo,
-                        "cripticidad": cripticidad,
-                    },
-                    criterio_salida="casos propuestos basados en código real",
-                )
-            )
-        if not pasos_extra:
-            return plan
-        plan.pasos.extend(pasos_extra)
-        plan.pendientes.extend(pasos_extra)
-        return plan
+        """Añade pasos deterministas de sugerencia de pruebas (delegado a
+        `plan_enrichment.enriquecer_plan_pruebas`)."""
+        return _plan_enrichment.enriquecer_plan_pruebas(
+            plan, texto, self._herramientas, self._ruta_base()
+        )
 
     def _enriquecer_plan_analisis_capa(
         self, plan: Plan | None, texto: str
     ) -> Plan | None:
-        """Añade pasos deterministas para analizar UNA capa/carpeta concreta.
-
-        Para intenciones como "explora todas las clases de la capa DAL", el
-        plan del LLM suele quedarse en un subconjunto de archivos (los modelos
-        rápidos planifican por convención de nombres, no por el árbol real).
-        Se enriquece de forma determinista: `explore` de la capa real + una
-        `leer_archivo` por cada archivo de código existente hasta el
-        presupuesto de pasos (SC-016), de modo que la cobertura de la capa no
-        dependa del plan del LLM (FR-024 / VI).
-        Solo actúa si la capa existe realmente (FR-019): nunca inventa rutas.
-        """
-        if plan is None or not _es_analisis_capa(texto):
-            return plan
-        explore = self._herramientas.get("explore")
-        leer = self._herramientas.get("leer_archivo")
-        if explore is None or leer is None:
-            return plan
-        capa = _resolver_capa_real(
-            self._ruta_base(), _extraer_capa_solicitada(texto)
+        """Añade pasos deterministas para analizar UNA capa/carpeta concreta
+        (delegado a `plan_enrichment.enriquecer_plan_analisis_capa`)."""
+        return _plan_enrichment.enriquecer_plan_analisis_capa(
+            plan,
+            texto,
+            self._herramientas,
+            self._ruta_base(),
+            self._pasos_max,
+            _PRESUPUESTO_ANALISIS_GLOBAL,
         )
-        if not capa:
-            return plan
-
-        pasos_extra: list[PasoDePlan] = []
-        orden = max((p.orden for p in plan.pasos), default=len(plan.pasos))
-        ya_explora = self._plan_ya_explora_capa(plan, capa)
-        if not ya_explora:
-            orden += 1
-            pasos_extra.append(
-                PasoDePlan(
-                    orden=orden,
-                    razon=(
-                        f"explorar la capa real '{capa}' solicitada por el "
-                        "usuario"
-                    ),
-                    herramienta="explore",
-                    parametros={
-                        "ruta": str(Path(self._ruta_base()) / capa),
-                        "profundidad_max": 3,
-                    },
-                    criterio_salida="estructura completa de la capa",
-                )
-            )
-        # Límite adaptativo (SC-016): lee los archivos de la capa que quepan en
-        # el presupuesto restante del bucle, sin excederlo. Con el tope fijo
-        # (p. ej. 12) la capa DAL real de ReservaHotel quedaba incompleta
-        # (TipoPagoDAL.cs y UsuarioDAL.cs nunca se leían).
-        presupuesto = self._presupuesto_pasos(texto)
-        max_lecturas = max(
-            0, presupuesto - len(plan.pasos) - (1 if not ya_explora else 0)
-        )
-        for archivo in self._archivos_codigo_de_capa(
-            explore, capa, max_archivos=max_lecturas
-        ):
-            if self._plan_ya_lee_archivo(plan, archivo):
-                continue
-            orden += 1
-            pasos_extra.append(
-                PasoDePlan(
-                    orden=orden,
-                    razon=(
-                        f"leer el código real de '{archivo}' de la capa "
-                        f"'{capa}'"
-                    ),
-                    herramienta="leer_archivo",
-                    parametros={
-                        "ruta": self._ruta_base(),
-                        "archivo_relativo": archivo,
-                    },
-                    criterio_salida="contenido real del archivo",
-                )
-            )
-        if not pasos_extra:
-            return plan
-        plan.pasos.extend(pasos_extra)
-        plan.pendientes.extend(pasos_extra)
-        return plan
 
     def _archivos_codigo_de_capa(
         self, explore: Herramienta, capa: str, max_archivos: int = 2
     ) -> list[str]:
-        """Archivos de código REALES de la capa, relativos a la raíz.
-
-        Descubrimiento determinista con `explore` (FR-024): devuelve los
-        archivos que existen, nunca inventados (FR-019).
-        """
-        try:
-            resultado = explore.ejecutar(
-                {
-                    "ruta": str(Path(self._ruta_base()) / capa),
-                    "profundidad_max": 3,
-                }
-            )
-        except Exception:  # noqa: BLE001
-            return []
-        if resultado.estado != EstadoResultado.EXITO:
-            return []
-        archivos = sorted(
-            str(Path(capa) / e["ruta_relativa"]).replace("\\", "/")
-            for e in (resultado.datos.get("elementos") or [])
-            if e.get("tipo") == "archivo"
-            and _es_archivo_codigo(e.get("ruta_relativa", ""))
+        """Archivos de código REALES de la capa (delegado a
+        `plan_enrichment.archivos_codigo_de_capa`)."""
+        return _plan_enrichment.archivos_codigo_de_capa(
+            explore, self._ruta_base(), capa, max_archivos=max_archivos
         )
-        return archivos[:max_archivos]
 
     def _plan_ya_explora_capa(self, plan: Plan, capa: str) -> bool:
-        """True si el plan ya explora esa capa (misma ruta de raíz)."""
-        raiz = str(Path(self._ruta_base()) / capa)
-        return any(
-            p.herramienta == "explore" and p.parametros.get("ruta") == raiz
-            for p in plan.pasos
-        )
+        """True si el plan ya explora esa capa (delegado a
+        `plan_enrichment.plan_ya_explora_capa`)."""
+        return _plan_enrichment.plan_ya_explora_capa(plan, capa, self._ruta_base())
 
     def _plan_ya_lee_archivo(self, plan: Plan, archivo: str) -> bool:
-        """True si el plan ya lee ese archivo (mismo `archivo_relativo`)."""
-        return any(
-            p.herramienta == "leer_archivo"
-            and p.parametros.get("archivo_relativo") == archivo
-            for p in plan.pasos
-        )
+        """True si el plan ya lee ese archivo (delegado a
+        `plan_enrichment.plan_ya_lee_archivo`)."""
+        return _plan_enrichment.plan_ya_lee_archivo(plan, archivo)
 
     def _parametros_para(
         self, herramienta: Herramienta, solicitud_texto: str
