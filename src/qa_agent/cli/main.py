@@ -191,6 +191,11 @@ def _pedir_autorizacion(herramienta_id: str) -> bool:
     return decision in {"si", "sí", "s", "y", "yes"}
 
 
+#: Tope de rondas de autorización por solicitud. Cada ronda es una pregunta
+#: al usuario; sin tope, un plan que se replanifica igual preguntaría sin fin.
+_MAX_RONDAS_AUTORIZACION = 4
+
+
 def _procesar_solicitud(
     agente: Agent, texto: str, *, simulacion: bool = False, interactivo: bool = True
 ):
@@ -203,17 +208,30 @@ def _procesar_solicitud(
     pasar por ella.
     """
     respuesta = agente.atender(texto)
-    pendientes = [
-        a
-        for a in respuesta.acciones
-        if a.estado == EstadoAccion.PENDIENTE_AUTORIZACION
-    ]
-    if not pendientes:
-        return respuesta
-    if simulacion or not interactivo:
-        return respuesta
-    decision = _pedir_autorizacion(pendientes[0].herramienta_id)
-    return agente.atender(texto, autorizacion=decision)
+
+    # Un plan puede tener MÁS de una acción sensible (p. ej. editar_archivo y
+    # después run_tests). Resolvía solo la primera y la segunda quedaba
+    # suspendida en silencio: el usuario decía "sí", veía el archivo sin
+    # cambiar y no había forma de saber por qué. Se itera hasta que no queden
+    # pendientes, con tope para no dar vueltas si el modelo replanifica lo
+    # mismo una y otra vez.
+    ya_preguntadas: set[str] = set()
+    for _ in range(_MAX_RONDAS_AUTORIZACION):
+        pendientes = [
+            a
+            for a in respuesta.acciones
+            if a.estado == EstadoAccion.PENDIENTE_AUTORIZACION
+            and a.herramienta_id not in ya_preguntadas
+        ]
+        if not pendientes:
+            return respuesta
+        if simulacion or not interactivo:
+            return respuesta
+        herramienta_id = pendientes[0].herramienta_id
+        ya_preguntadas.add(herramienta_id)
+        decision = _pedir_autorizacion(herramienta_id)
+        respuesta = agente.atender(texto, autorizacion=decision)
+    return respuesta
 
 
 _AYUDA_CHAT = """\

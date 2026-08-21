@@ -360,14 +360,26 @@ class OpenAICompatibleBackend(LLMBackend):
             sistema, f"{intencion.texto}\n\n{intencion.contexto}"
         )
         ids_validos = {h.id for h in catalogo}
-        vistos: set[tuple] = set()
+        vistos: set[str] = set()
         pasos = []
         for paso_dict in datos.get("pasos", []):
             if paso_dict.get("herramienta") not in ids_validos:
                 continue
             parametros = dict(paso_dict.get("parametros") or {})
             # Deduplicar pasos idénticos (misma herramienta + parámetros).
-            clave = (paso_dict["herramienta"], tuple(sorted(parametros.items())))
+            # La clave se serializa a JSON porque un parámetro puede ser una
+            # lista o un dict —`editar_archivo` recibe `reemplazos`, una lista
+            # de objetos— y `tuple(sorted(...))` reventaba con
+            # "unhashable type: 'list'", tumbando la planificación entera y
+            # dejando la solicitud sin ningún paso. `sort_keys` hace la clave
+            # estable, y `default=str` evita que un valor exótico repita el
+            # mismo fallo.
+            clave = json.dumps(
+                [paso_dict["herramienta"], parametros],
+                sort_keys=True,
+                ensure_ascii=False,
+                default=str,
+            )
             if clave in vistos:
                 continue
             vistos.add(clave)

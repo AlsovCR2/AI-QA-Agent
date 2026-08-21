@@ -175,3 +175,115 @@ def test_crear_con_python_valido_sigue_funcionando(tmp_path):
 
     assert resultado.estado == EstadoResultado.EXITO
     assert (raiz / "tests" / "test_nuevo.py").exists()
+
+
+# --- Edición por reemplazo exacto ------------------------------------------
+
+
+def test_reemplazo_acotado_no_toca_el_resto_del_archivo(tmp_path):
+    """El punto de `reemplazos`: no obliga a reproducir lo que no cambia."""
+    raiz = _proyecto(tmp_path)
+
+    resultado = EditarArchivoHerramienta([str(raiz)]).ejecutar(
+        {
+            "ruta": str(raiz),
+            "archivo_relativo": "paquete/mod.py",
+            "reemplazos": [{"buscar": "return 1", "reemplazar": "return 2"}],
+        }
+    )
+
+    contenido = (raiz / "paquete" / "mod.py").read_text(encoding="utf-8")
+    assert resultado.estado == EstadoResultado.EXITO
+    assert "return 2" in contenido
+    assert contenido.startswith('"""Módulo."""')
+
+
+def test_reemplazo_que_no_aparece_se_rechaza(tmp_path):
+    """Cero coincidencias = el modelo citó de memoria, no copió."""
+    raiz = _proyecto(tmp_path)
+
+    resultado = EditarArchivoHerramienta([str(raiz)]).ejecutar(
+        {
+            "ruta": str(raiz),
+            "archivo_relativo": "paquete/mod.py",
+            "reemplazos": [{"buscar": "return 99", "reemplazar": "return 2"}],
+        }
+    )
+
+    assert resultado.estado == EstadoResultado.INVALIDO
+    assert (raiz / "paquete" / "mod.py").read_text(encoding="utf-8") == _MODULO_BUENO
+
+
+def test_reemplazo_ambiguo_se_rechaza(tmp_path):
+    """Varias coincidencias: adivinar cuál sería peor que fallar."""
+    raiz = tmp_path
+    (raiz / "m.py").write_text("x = 1\ny = 1\n", encoding="utf-8")
+
+    resultado = EditarArchivoHerramienta([str(raiz)]).ejecutar(
+        {
+            "ruta": str(raiz),
+            "archivo_relativo": "m.py",
+            "reemplazos": [{"buscar": "1", "reemplazar": "2"}],
+        }
+    )
+
+    assert resultado.estado == EstadoResultado.INVALIDO
+    assert "ambiguo" in resultado.error
+    assert (raiz / "m.py").read_text(encoding="utf-8") == "x = 1\ny = 1\n"
+
+
+def test_un_reemplazo_que_rompe_la_sintaxis_se_rechaza(tmp_path):
+    """La validación se aplica al RESULTADO, no solo a `contenido`."""
+    raiz = _proyecto(tmp_path)
+
+    resultado = EditarArchivoHerramienta([str(raiz)]).ejecutar(
+        {
+            "ruta": str(raiz),
+            "archivo_relativo": "paquete/mod.py",
+            "reemplazos": [{"buscar": "def f() -> int:", "reemplazar": "def f(:"}],
+        }
+    )
+
+    assert resultado.estado == EstadoResultado.INVALIDO
+    assert (raiz / "paquete" / "mod.py").read_text(encoding="utf-8") == _MODULO_BUENO
+
+
+def test_varios_reemplazos_se_aplican_en_orden(tmp_path):
+    raiz = tmp_path
+    (raiz / "m.py").write_text("a = 1\nb = 2\n", encoding="utf-8")
+
+    EditarArchivoHerramienta([str(raiz)]).ejecutar(
+        {
+            "ruta": str(raiz),
+            "archivo_relativo": "m.py",
+            "reemplazos": [
+                {"buscar": "a = 1", "reemplazar": "a = 10"},
+                {"buscar": "b = 2", "reemplazar": "b = 20"},
+            ],
+        }
+    )
+
+    assert (raiz / "m.py").read_text(encoding="utf-8") == "a = 10\nb = 20\n"
+
+
+def test_sin_contenido_ni_reemplazos_se_rechaza(tmp_path):
+    raiz = _proyecto(tmp_path)
+
+    resultado = EditarArchivoHerramienta([str(raiz)]).ejecutar(
+        {"ruta": str(raiz), "archivo_relativo": "paquete/mod.py"}
+    )
+
+    assert resultado.estado == EstadoResultado.INVALIDO
+
+
+def test_contenido_completo_sigue_funcionando(tmp_path):
+    """`reemplazos` se añade sin romper el camino existente."""
+    raiz = _proyecto(tmp_path)
+    nuevo = '"""Otro."""\n\n\ndef g() -> int:\n    return 3\n'
+
+    resultado = EditarArchivoHerramienta([str(raiz)]).ejecutar(
+        {"ruta": str(raiz), "archivo_relativo": "paquete/mod.py", "contenido": nuevo}
+    )
+
+    assert resultado.estado == EstadoResultado.EXITO
+    assert (raiz / "paquete" / "mod.py").read_text(encoding="utf-8") == nuevo

@@ -85,3 +85,57 @@ def _mensaje_python(error: SyntaxError) -> str:
     if error.text and error.text.strip():
         partes.append(f"→ {error.text.strip()}")
     return " ".join(partes) + ". No se escribió nada."
+
+
+def reemplazar_funcion(original: str, nombre: str, codigo: str) -> tuple[str, str]:
+    """Sustituye la función `nombre` por `codigo`. Devuelve `(contenido, error)`.
+
+    Existe porque los modelos pequeños fallan sistemáticamente al CITAR código
+    existente pero aciertan al ESCRIBIR la función nueva. Medido contra Gemini
+    el 2026-08-21: pedirle un reemplazo exacto producía un `buscar` inventado
+    —`def mediana(lista): # Implementación previa...`, que no está en el
+    archivo— mientras el cuerpo nuevo que proponía era correcto.
+
+    El localizador es `ast`, no una expresión regular: la posición de la
+    función la decide el parser de Python, no una heurística de texto. Se
+    incluyen los decoradores en el tramo sustituido para no dejarlos huérfanos.
+    """
+    import ast
+
+    try:
+        arbol = ast.parse(original)
+    except SyntaxError as error:
+        return "", f"El archivo actual no es Python válido ({error.msg}); no se tocó nada."
+
+    definiciones = [
+        nodo
+        for nodo in ast.walk(arbol)
+        if isinstance(nodo, ast.FunctionDef | ast.AsyncFunctionDef)
+        and nodo.name == nombre
+    ]
+    if not definiciones:
+        return "", (
+            f"No existe una función llamada '{nombre}' en el archivo. "
+            "No se escribió nada."
+        )
+    if len(definiciones) > 1:
+        return "", (
+            f"Hay {len(definiciones)} funciones llamadas '{nombre}' y es "
+            "ambiguo cuál sustituir. No se escribió nada."
+        )
+
+    definicion = definiciones[0]
+    # `lineno` apunta al `def`; los decoradores van antes y deben ir con él.
+    inicio = min(
+        [definicion.lineno] + [d.lineno for d in definicion.decorator_list]
+    )
+    fin = definicion.end_lineno or definicion.lineno
+
+    lineas = original.splitlines(keepends=True)
+    nuevo = codigo if codigo.endswith("\n") else codigo + "\n"
+    resultado = "".join(lineas[: inicio - 1]) + nuevo + "".join(lineas[fin:])
+
+    problema = error_de_sintaxis("x.py", resultado)
+    if problema:
+        return "", problema
+    return resultado, ""
