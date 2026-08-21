@@ -223,6 +223,85 @@ def test_no_redacta_bloque_pem_clave_publica():
     assert redactor.redactar(bloque) == bloque
 
 
+# -- I08: cobertura ampliada de secretos (grupo C: npm / conexión / genérico) --
+
+
+def test_redacta_token_npm():
+    redactor = Redactor()
+    secreto = "npm_" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8"
+    assert redactor.redactar(f"registry token: {secreto}") == "registry token: ***"
+
+
+def test_no_redacta_mencion_npm_sin_token():
+    """Mencionar 'npm' en prosa (sin token de 36+ chars) no debe redactarse."""
+    redactor = Redactor()
+    texto = "ejecuta npm install y luego npm run build"
+    assert redactor.redactar(texto) == texto
+
+
+def test_no_redacta_token_npm_demasiado_corto():
+    """Un valor con prefijo npm_ pero por debajo del largo real no es un token válido."""
+    redactor = Redactor()
+    texto = "variable npm_short123 usada en pruebas"
+    assert redactor.redactar(texto) == texto
+
+
+def test_redacta_credenciales_en_cadena_de_conexion():
+    redactor = Redactor()
+    texto = "DATABASE_URL=postgres://admin:contraseñaSecreta1@db.internal:5432/prod"
+    assert "contraseñaSecreta1" not in redactor.redactar(texto)
+    assert "postgres://***@db.internal:5432/prod" in redactor.redactar(texto)
+
+
+def test_no_redacta_url_sin_credenciales():
+    """Una URL normal, sin usuario:contraseña embebidos, no se toca."""
+    redactor = Redactor()
+    texto = "consulta la documentación en https://example.com/docs?ref=readme"
+    assert redactor.redactar(texto) == texto
+
+
+def test_no_redacta_hora_y_correo_similar_a_credenciales():
+    """Una hora (10:30) y un correo (usuario@dominio) sin 'esquema://' no coinciden."""
+    redactor = Redactor()
+    texto = "la reunión es a las 10:30, escribe a soporte@example.com"
+    assert redactor.redactar(texto) == texto
+
+
+def test_redacta_asignacion_password():
+    redactor = Redactor()
+    assert redactor.redactar("password=MiClaveSuperSecreta1") == "***"
+
+
+def test_redacta_asignacion_secret():
+    redactor = Redactor()
+    assert redactor.redactar("secret=valorConfidencial99") == "***"
+
+
+def test_redacta_asignacion_token_generico():
+    redactor = Redactor()
+    assert redactor.redactar("token=abcdef123456") == "***"
+
+
+def test_no_redacta_identificador_compuesto_con_token():
+    """Un identificador compuesto (reset_token) no es la clave exacta 'token'."""
+    redactor = Redactor()
+    texto = "reset_token = generar_valor()"
+    assert redactor.redactar(texto) == texto
+
+
+def test_no_redacta_mencion_de_password_sin_asignacion():
+    """Mencionar 'password' en prosa, sin '=', no debe redactarse."""
+    redactor = Redactor()
+    texto = "recuerda actualizar tu password antes de iniciar sesión"
+    assert redactor.redactar(texto) == texto
+
+
+def test_no_redacta_hash_hex_generico_como_secreto_generico():
+    redactor = Redactor()
+    texto = "checksum: 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+    assert redactor.redactar(texto) == texto
+
+
 # -- SC-008: secretos ausentes en respuesta, historial y logs --------------
 
 

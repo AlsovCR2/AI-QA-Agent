@@ -37,6 +37,21 @@ _PATRONES: list[re.Pattern[str]] = [
         r"[\s\S]+?"
         r"-----END (?:RSA |EC |DSA |OPENSSH |)PRIVATE KEY-----"
     ),
+    # Tokens npm/registro: npm_ + 36 alfanuméricos
+    re.compile(r"\bnpm_[A-Za-z0-9]{36}\b"),
+    # Credenciales embebidas en cadenas de conexión: esquema://usuario:contraseña@
+    # Solo se sustituye "usuario:contraseña" (lookbehind "://", lookahead "@";
+    # el propio "@" no forma parte de la coincidencia y se conserva).
+    re.compile(r"(?<=://)[^\s:@/]{1,100}:[^\s@/]{1,200}(?=@)"),
+    # Asignaciones genéricas password=/secret=/token= (clave exacta, no
+    # identificadores compuestos como "reset_token"). El lookahead negativo
+    # evita volver a consumir un valor ya redactado por un patrón anterior
+    # (idempotencia dentro de la misma pasada, p. ej. "token=***").
+    re.compile(
+        r"\b(?:password|secret|token)\s*=\s*(?!\*\*\*(?:[\s'\"]|$))"
+        r"['\"]?[^\s'\"&]+['\"]?",
+        re.IGNORECASE,
+    ),
 ]
 
 
